@@ -1,0 +1,20 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": { "major": 3, "minor": 20, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "msys2-clang",
+      "displayName": "MSYS2 UCRT64 Clang (matches llvm-config for cvm-translate)",
+      "description": "Use the msys2 ucrt64 clang/clang++ so the C/C++ compiler and the LLVM dev libraries that cvm-translate links against come from the SAME distribution. Mixing scoop's mingw-mstorsjo-llvm (libc++, no llvm-config) with msys2's LLVM headers breaks libc++'s #include_next chain (cwctype/cwchar/... errors). See docs/BUILDING.md.",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "C:/msys64/ucrt64/bin/clang.exe",
+        "CMAKE_CXX_COMPILER": "C:/msys64/ucrt64/bin/clang++.exe"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "msys2-clang", "configurePreset": "msys2-clang" }
+  ]
+}

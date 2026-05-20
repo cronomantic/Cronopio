@@ -1,0 +1,3 @@
+[submodule "external/CronoVM"]
+	path = external/CronoVM
+	url = https://github.com/cronomantic/CronoVM

@@ -1,0 +1,9 @@
+build/
+build-*/
+out/
+*.bin
+!examples/**/expected/*.bin
+.vscode/
+.idea/
+*.user
+.DS_Store

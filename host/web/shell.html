@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Cronopio</title>
+<style>
+  html, body { margin: 0; background: #111; color: #ddd; font-family: monospace; }
+  body { display: flex; align-items: center; justify-content: center;
+         min-height: 100vh; flex-direction: column; gap: 12px; }
+  canvas { image-rendering: pixelated; background: #000;
+           width: 960px; height: 720px; }
+  #status { font-size: 12px; opacity: 0.6; }
+</style>
+</head>
+<body>
+  <canvas id="canvas" oncontextmenu="event.preventDefault()" tabindex="-1"></canvas>
+  <div id="status">loading…</div>
+<script>
+  var Module = {
+    canvas: document.getElementById('canvas'),
+    setStatus: (t) => { document.getElementById('status').textContent = t; },
+    arguments: ['cart.bin'],
+    preRun: [function () {
+      FS.createPreloadedFile('/', 'cart.bin', 'cart.bin', true, false);
+    }],
+  };
+</script>
+{{{ SCRIPT }}}
+</body>
+</html>
