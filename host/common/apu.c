@@ -39,6 +39,7 @@ void cron_apu_pcm(cronopio_console_t* c, int ch, int slot,
     v->pcm_len       = sb->len;
     v->pcm_loopstart = 0;
     v->pcm_looplen   = loop ? sb->len : 0;   /* whole-sample loop, or one-shot */
+    v->pcm_unsigned  = sb->u8;
     v->pcm_pos       = 0;
     v->pcm_step      = (uint32_t)(((uint64_t)native * (uint64_t)(uint32_t)pitch_q16) >> 16);
     v->vol      = clampi(vol, 0, 255);
@@ -74,12 +75,33 @@ void cron_apu_master(cronopio_console_t* c, int vol_q8) {
 }
 
 void cron_apu_sample(cronopio_console_t* c, int slot, uint32_t offset,
-                     uint32_t len, uint32_t rate, uint32_t mem_size) {
+                     uint32_t len, uint32_t rate, int u8, uint32_t mem_size) {
     if ((unsigned)slot >= CRONOPIO_SAMPLE_SLOTS) return;
     if (len == 0 || rate == 0) return;
     if ((uint64_t)offset + len > mem_size) return;   /* out of cart memory */
     c->samples[slot].offset = offset;
     c->samples[slot].len    = len;
     c->samples[slot].rate   = rate;
+    c->samples[slot].u8     = u8 ? 1 : 0;
     c->samples[slot].used   = 1;
+}
+
+int cron_apu_stream_free(cronopio_console_t* c) {
+    int filled = (c->stream_head - c->stream_tail + CRONOPIO_STREAM_FRAMES)
+               % CRONOPIO_STREAM_FRAMES;
+    return CRONOPIO_STREAM_FRAMES - 1 - filled;
+}
+
+int cron_apu_stream(cronopio_console_t* c, uint32_t off, int nframes, uint32_t mem_size) {
+    if (!c->heap || nframes <= 0) return 0;
+    if ((uint64_t)off + (uint64_t)nframes * 4u > mem_size) return 0;
+    const int16_t* src = (const int16_t*)(c->heap + off);
+    int free = cron_apu_stream_free(c);
+    if (nframes > free) nframes = free;
+    for (int i = 0; i < nframes; ++i) {
+        c->stream[c->stream_head * 2]     = src[i * 2];
+        c->stream[c->stream_head * 2 + 1] = src[i * 2 + 1];
+        c->stream_head = (c->stream_head + 1) % CRONOPIO_STREAM_FRAMES;
+    }
+    return nframes;
 }

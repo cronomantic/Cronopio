@@ -29,13 +29,20 @@ full control):
 
 | Name                 | Signature                                                       | Notes |
 |----------------------|-----------------------------------------------------------------|-------|
-| `cron_sample`        | `void(i32 slot, const i8* ptr, i32 len, i32 rate)`             | Register an 8-bit signed mono PCM sample |
+| `cron_sample`        | `void(i32 slot, const i8* ptr, i32 len, i32 rate)`             | Register an 8-bit **signed** mono PCM sample |
+| `cron_sample_u8`     | `void(i32 slot, const u8* ptr, i32 len, i32 rate)`            | Register an 8-bit **unsigned** mono sample (DOOM DMX `DS*`), played straight from ROM — no copy/convert |
 | `cron_snd_tone`      | `void(i32 v, i32 wave, i32 freq_mhz, i32 vol, i32 pan)`        | Synth on voice v (existing) |
 | `cron_pcm`           | `void(i32 v, i32 sample, i32 pitch_q16, i32 vol, i32 pan, i32 loop)` | Play a sample on voice v; pitch 0x10000 = the sample's native rate |
 | `cron_env`           | `void(i32 v, i32 attack_ms, i32 decay_ms, i32 sustain, i32 release_ms)` | Envelope applied to the next trigger on v |
 | `cron_note_off`      | `void(i32 v)`                                                  | Enter release |
 | `cron_snd_stop`      | `void(i32 v)`                                                  | Hard stop |
 | `cron_snd_master`    | `void(i32 vol_q8)`                                             | Master volume 0..256 |
+| `cron_stream`        | `i32(const i16* frames, i32 nframes)`                         | Queue 16-bit signed *stereo* frames into the host playback ring; returns frames queued |
+| `cron_stream_free`   | `i32()`                                                       | Frames the stream ring can accept right now |
+
+The stream is the escape hatch for music a cart renders itself (any synth or
+codec): fill it each frame from `cron_stream_free()` worth of samples and the
+mixer plays it alongside the voices.
 
 ## Layer 2 — sound effects
 
@@ -70,6 +77,21 @@ a future FM voice mode, or converting MIDI to MOD/patterns offline.
 
 `0x200–0x2FF` — extended audio. `0x200` block = Layer 1 (samples + voices)
 and SFX triggers; `0x220` block = MOD music.
+
+## DOOM audio
+
+- **SFX** are DMX `DS*` lumps: 8-bit **unsigned** PCM, ~11 kHz mono. The port
+  registers each lump straight from the WAD in cart ROM with `cron_sample_u8`
+  (no copy/convert), then plays it with `cron_pcm(voice, sample, pitch, vol,
+  pan, 0)` — vol/pan from DOOM's distance/angle, optional pitch wobble. It
+  manages ~8 voices with DOOM's priority/cutoff logic; SFX use voices above
+  the MOD channel count (or any free voices if no MOD is playing).
+- **Music** is MUS (a MIDI variant) — note events, no sound. The port renders
+  it with its own bundled **OPL2 emulator** (the authentic DOS sound) into
+  16-bit stereo and feeds the host via `cron_stream` each frame (sized by
+  `cron_stream_free`). The console stays synth-agnostic; the same path serves
+  any streamed music. (A host-side OPL+MUS player remains a possible future
+  alternative; not needed for a port.)
 
 ## Status
 

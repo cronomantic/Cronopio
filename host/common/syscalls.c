@@ -402,8 +402,19 @@ static int sys_snd_stop(struct cvm_image *img, int32_t *r, void *ud) {
 
 static int sys_sample(struct cvm_image *img, int32_t *r, void *ud) {
     ctx_t *x = (ctx_t*)ud;
-    cron_apu_sample(x->c, (int)r[0], (uint32_t)r[1], (uint32_t)r[2], (uint32_t)r[3], img->mem_size);
+    /* r: slot, ptr, len, rate, fmt(0=signed8,1=unsigned8) */
+    cron_apu_sample(x->c, (int)r[0], (uint32_t)r[1], (uint32_t)r[2], (uint32_t)r[3], (int)r[4], img->mem_size);
     r[0] = 0;
+    return 0;
+}
+static int sys_stream(struct cvm_image *img, int32_t *r, void *ud) {
+    ctx_t *x = (ctx_t*)ud;
+    r[0] = cron_apu_stream(x->c, (uint32_t)r[0], (int)r[1], img->mem_size);
+    return 0;
+}
+static int sys_stream_free(struct cvm_image *img, int32_t *r, void *ud) {
+    (void)img;
+    r[0] = cron_apu_stream_free(((ctx_t*)ud)->c);
     return 0;
 }
 static int sys_pcm(struct cvm_image *img, int32_t *r, void *ud) {
@@ -555,6 +566,8 @@ static const entry_t kSyscalls[] = {
     { "cvm_sys_cron_note_off",     sys_note_off     },
     { "cvm_sys_cron_mod_play",     sys_mod_play     },
     { "cvm_sys_cron_mod_stop",     sys_mod_stop     },
+    { "cvm_sys_cron_stream",       sys_stream       },
+    { "cvm_sys_cron_stream_free",  sys_stream_free  },
     /* input */
     { "cvm_sys_cron_pad",          sys_pad          },
     { "cvm_sys_cron_pad_pressed",  sys_pad_pressed  },

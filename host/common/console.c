@@ -138,8 +138,9 @@ void cronopio_console_mix(cronopio_console_t* c, int16_t* dst, int frames) {
                     } else { voice->active = 0; continue; }
                 }
                 if (idx >= voice->pcm_len) { voice->active = 0; continue; }
-                int8_t s8 = (int8_t)c->heap[voice->pcm_off + idx];
-                sample = (int32_t)s8 << 7;        /* -128..127 -> ~-16384..16256 */
+                uint8_t b = c->heap[voice->pcm_off + idx];
+                int32_t s8 = voice->pcm_unsigned ? ((int32_t)b - 128) : (int32_t)(int8_t)b;
+                sample = s8 << 7;                 /* -128..127 -> ~-16384..16256 */
                 voice->pcm_pos += voice->pcm_step;
             } else {
                 uint32_t inc = (uint32_t)(((uint64_t)voice->freq_mhz << 32) /
@@ -174,6 +175,13 @@ void cronopio_console_mix(cronopio_console_t* c, int16_t* dst, int frames) {
             mix_l += (s * lg) >> 8;
             mix_r += (s * rg) >> 8;
         }
+        /* Drain one streamed frame (pre-rendered music) into the mix. */
+        if (c->stream_tail != c->stream_head) {
+            mix_l += c->stream[c->stream_tail * 2];
+            mix_r += c->stream[c->stream_tail * 2 + 1];
+            c->stream_tail = (c->stream_tail + 1) % CRONOPIO_STREAM_FRAMES;
+        }
+
         mix_l = (mix_l * c->master_vol_q8) >> 8;
         mix_r = (mix_r * c->master_vol_q8) >> 8;
         if (mix_l >  32767) mix_l =  32767; else if (mix_l < -32768) mix_l = -32768;

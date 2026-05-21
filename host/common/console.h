@@ -70,6 +70,7 @@ typedef struct {
     uint32_t pcm_looplen;
     uint32_t pcm_pos;
     uint32_t pcm_step;
+    int      pcm_unsigned;   /* 1 = sample bytes are unsigned 8-bit (DMX) */
 
     /* ADSR envelope (level is Q8.8: 0..255<<8). Times in samples. */
     int      env_stage;
@@ -87,8 +88,14 @@ typedef struct {
     uint32_t offset;
     uint32_t len;
     uint32_t rate;
+    int      u8;          /* 1 = unsigned 8-bit (DMX), 0 = signed 8-bit */
     int      used;
 } cron_sample_bank_t;
+
+/* Streaming PCM: a host ring buffer of 16-bit signed *stereo* frames at the
+ * output rate. The cart renders music (e.g. a DOOM MUS via its own OPL
+ * emulator) and pushes frames; the mixer drains and adds them. */
+#define CRONOPIO_STREAM_FRAMES  8192
 
 #define CRONOPIO_MOD_MAXCHAN  8
 #define CRONOPIO_MOD_SAMPLES  31
@@ -184,6 +191,13 @@ typedef struct {
     cron_sample_bank_t samples[CRONOPIO_SAMPLE_SLOTS];
     int                master_vol_q8;            /* 0..256 */
     cron_mod_t         mod;                       /* host-side MOD player */
+
+    /* Streaming PCM ring (16-bit stereo). head written by the cart thread
+     * (cron_stream), tail by the audio thread (mixer); single-producer /
+     * single-consumer, races benign. */
+    int16_t            stream[CRONOPIO_STREAM_FRAMES * 2];
+    int                stream_head;
+    int                stream_tail;
     /* Cart heap base, captured at load so the audio thread can read PCM
      * sample bytes (the audio callback only gets the console pointer). */
     const uint8_t     *heap;
@@ -242,7 +256,11 @@ void     cron_apu_tone   (cronopio_console_t* c, int ch, int wave,
 void     cron_apu_stop   (cronopio_console_t* c, int ch);
 void     cron_apu_master (cronopio_console_t* c, int vol_q8);
 void     cron_apu_sample (cronopio_console_t* c, int slot, uint32_t offset,
-                          uint32_t len, uint32_t rate, uint32_t mem_size);
+                          uint32_t len, uint32_t rate, int u8, uint32_t mem_size);
+/* Queue `nframes` 16-bit stereo frames from heap+off into the stream ring;
+ * returns frames actually queued. cron_apu_stream_free returns ring space. */
+int      cron_apu_stream     (cronopio_console_t* c, uint32_t off, int nframes, uint32_t mem_size);
+int      cron_apu_stream_free(cronopio_console_t* c);
 void     cron_apu_pcm    (cronopio_console_t* c, int v, int slot,
                           uint32_t pitch_q16, int vol, int pan, int loop);
 void     cron_apu_env    (cronopio_console_t* c, int v, int attack_ms,
