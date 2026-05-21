@@ -137,6 +137,53 @@ static void cron_mat_lookat(cron_mat4* o, cron_vec3 eye, cron_vec3 target, cron_
     o->m[12]=0;   o->m[13]=0;   o->m[14]=0;   o->m[15]=1.0f;
 }
 
+/* Transform a direction (w=0) by m's upper-left 3x3 — for normals and light
+ * vectors. Correct for the rotation/uniform-scale matrices these helpers
+ * build (no shear); for a general matrix you'd want the inverse-transpose. */
+static inline void cron_mat_dir(cron_vec3* o, const cron_mat4* m, cron_vec3 d) {
+    float x = m->m[0]*d.x + m->m[1]*d.y + m->m[2]*d.z;
+    float y = m->m[4]*d.x + m->m[5]*d.y + m->m[6]*d.z;
+    float z = m->m[8]*d.x + m->m[9]*d.y + m->m[10]*d.z;
+    o->x = x; o->y = y; o->z = z;
+}
+
+/* ---- lighting --------------------------------------------------------- */
+
+/* Lambert diffuse term: dot(normalize(n), normalize(to_light)), clamped to
+ * [0,1]. `to_light` points from the surface toward the light. */
+static inline float cron_lambert(cron_vec3 n, cron_vec3 to_light) {
+    float d = cron_v3_dot(cron_v3_norm(n), cron_v3_norm(to_light));
+    return d < 0.0f ? 0.0f : d;
+}
+
+/* Outward unit normal of triangle (a,b,c), CCW winding. */
+static inline cron_vec3 cron_tri_normal(cron_vec3 a, cron_vec3 b, cron_vec3 c) {
+    return cron_v3_norm(cron_v3_cross(cron_v3_sub(b, a), cron_v3_sub(c, a)));
+}
+
+/* Build a `count`-entry palette gradient from `dark` to `bright`
+ * (0x00RRGGBB) at palette indices [base, base+count). Drawing GOURAUD with
+ * cron_cvert.light set to a ramp index (and no cmap) then gives smooth
+ * shading: interpolated light selects the gradient colour directly. */
+static inline void cron_palette_ramp(int base, int count,
+                                     uint32_t dark, uint32_t bright) {
+    for (int i = 0; i < count; ++i) {
+        float t = (count > 1) ? (float)i / (float)(count - 1) : 0.0f;
+        int r = (int)((float)((dark>>16)&0xFF) * (1.0f - t) + (float)((bright>>16)&0xFF) * t);
+        int g = (int)((float)((dark>> 8)&0xFF) * (1.0f - t) + (float)((bright>> 8)&0xFF) * t);
+        int b = (int)((float)((dark    )&0xFF) * (1.0f - t) + (float)((bright    )&0xFF) * t);
+        cron_palette_set(base + i, ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b);
+    }
+}
+
+/* Map a 0..1 intensity to a ramp index in [base, base+count). */
+static inline int cron_shade(int base, int count, float intensity) {
+    if (intensity < 0.0f) intensity = 0.0f;
+    if (intensity > 1.0f) intensity = 1.0f;
+    int i = base + (int)(intensity * (float)(count - 1) + 0.5f);
+    return i;
+}
+
 /* Transform a point (w=1) by m into clip space. */
 __attribute__((noinline))
 static void cron_mat_point(cron_vec4* o, const cron_mat4* m, cron_vec3 p) {
