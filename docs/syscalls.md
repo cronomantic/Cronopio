@@ -66,13 +66,32 @@ The platform shell already blits + vsyncs after the frame fn returns,
 so `cron_present` is a stub today. It will become meaningful if a
 future ABI lets carts flush mid-frame.
 
-## Audio
+## Audio (0x030 + 0x200)
 
-| Name                       | Signature                                                | Notes                                          |
-|----------------------------|----------------------------------------------------------|------------------------------------------------|
-| `cvm_sys_cron_snd_tone`    | `void(i32 ch, i32 wave, i32 freq_mhz, i32 vol, i32 pan)` | wave: 0 sine, 1 square, 2 triangle, 3 noise    |
-| `cvm_sys_cron_snd_stop`    | `void(i32 ch)`                                           | Silence channel                                |
-| `cvm_sys_cron_snd_master`  | `void(i32 vol_q8)`                                       | Master volume, 0..256                          |
+16 voices, 22 050 Hz, 16-bit stereo. Each voice plays a synth waveform or an
+8-bit PCM sample, shaped by an ADSR envelope. Full model in
+[`audio.md`](audio.md).
+
+### Voices & SFX
+
+| Name                       | Signature                                                       | Notes                                          |
+|----------------------------|-----------------------------------------------------------------|------------------------------------------------|
+| `cvm_sys_cron_snd_tone`    | `void(i32 v, i32 wave, i32 freq_mhz, i32 vol, i32 pan)`         | Synth on voice v. wave: 0 sine, 1 square, 2 triangle, 3 noise, 4 pulse |
+| `cvm_sys_cron_snd_stop`    | `void(i32 v)`                                                   | Release/stop a voice                           |
+| `cvm_sys_cron_snd_master`  | `void(i32 vol_q8)`                                              | Master volume, 0..256                          |
+| `cvm_sys_cron_sample`      | `void(i32 slot, const void* ptr, i32 len, i32 rate, i32 fmt)`  | Register a PCM sample bank (fmt 0=signed8, 1=unsigned8/DMX) |
+| `cvm_sys_cron_pcm`         | `void(i32 v, i32 slot, i32 pitch_q16, i32 vol, i32 pan, i32 loop)` | Play sample `slot` on voice v; pitch 0x10000 = native rate |
+| `cvm_sys_cron_env`         | `void(i32 v, i32 attack_ms, i32 decay_ms, i32 sustain, i32 release_ms)` | ADSR for the next trigger on v          |
+| `cvm_sys_cron_note_off`    | `void(i32 v)`                                                   | Enter the envelope release stage               |
+
+### Music (MOD) & streaming
+
+| Name                       | Signature                                       | Notes                                          |
+|----------------------------|-------------------------------------------------|------------------------------------------------|
+| `cvm_sys_cron_mod_play`    | `i32(const void* mod, i32 len, i32 loop)`       | Play a ProTracker .mod (in RAM/ROM) on voices 0..n_channels-1; returns 0/-1 |
+| `cvm_sys_cron_mod_stop`    | `void()`                                        | Stop the module                                |
+| `cvm_sys_cron_stream`      | `i32(const i16* frames, i32 nframes)`           | Queue 16-bit stereo frames into the playback ring; returns queued |
+| `cvm_sys_cron_stream_free` | `i32()`                                         | Frames the stream ring can accept now          |
 
 ## Input
 

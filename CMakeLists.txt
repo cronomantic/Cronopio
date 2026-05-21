@@ -12,6 +12,7 @@ option(CRONOPIO_TARGET_DESKTOP  "Build desktop host (SDL2)"        ON)
 option(CRONOPIO_TARGET_WEB      "Build web host (Emscripten)"      OFF)
 option(CRONOPIO_TARGET_EMBEDDED "Build embedded host (HAL stub)"   OFF)
 option(CRONOPIO_BUILD_EXAMPLES  "Build example cartridges"         OFF)
+option(CRONOPIO_BUILD_TOOLS     "Build host-side tools (headless)" ON)
 
 # The embedded VM. Expected as a git submodule under external/CronoVM, but
 # we also accept external/external/CronoVM (a common accident when running
@@ -31,6 +32,10 @@ else()
 endif()
 
 add_subdirectory(host)
+
+if(CRONOPIO_BUILD_TOOLS AND TARGET cronopio_common)
+    add_subdirectory(tools/headless)
+endif()
 
 if(CRONOPIO_BUILD_EXAMPLES)
     add_subdirectory(examples)

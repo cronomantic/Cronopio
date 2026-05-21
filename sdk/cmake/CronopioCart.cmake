@@ -15,7 +15,14 @@ if(NOT DEFINED CRONOPIO_SDK_DIR)
     set(CRONOPIO_SDK_DIR "${CMAKE_CURRENT_LIST_DIR}/..")
 endif()
 
-find_program(CVM_CC cvm-cc DOC "Path to the cvm-cc compiler wrapper")
+# Prefer the in-tree cvm-cc target (when CronoVM is built as a subdirectory)
+# over any installed copy on PATH, so a fresh checkout builds cartridges with
+# the toolchain it just compiled.
+if(TARGET cvm-cc)
+    set(CVM_CC "$<TARGET_FILE:cvm-cc>")
+else()
+    find_program(CVM_CC cvm-cc DOC "Path to the cvm-cc compiler wrapper")
+endif()
 
 # Default reserves — most carts can override via cronopio_add_cartridge(
 #   ... HEAP_RESERVE 4M STACK_RESERVE 32K). The 32 MiB default is the v0.2
@@ -37,8 +44,12 @@ function(cronopio_add_cartridge name)
         return()
     endif()
 
-    if(NOT ARG_HEAP_RESERVE)  set(ARG_HEAP_RESERVE  "${CRONOPIO_DEFAULT_HEAP_RESERVE}") endif()
-    if(NOT ARG_STACK_RESERVE) set(ARG_STACK_RESERVE "${CRONOPIO_DEFAULT_STACK_RESERVE}") endif()
+    if(NOT ARG_HEAP_RESERVE)
+        set(ARG_HEAP_RESERVE  "${CRONOPIO_DEFAULT_HEAP_RESERVE}")
+    endif()
+    if(NOT ARG_STACK_RESERVE)
+        set(ARG_STACK_RESERVE "${CRONOPIO_DEFAULT_STACK_RESERVE}")
+    endif()
 
     # Optional read-only cartridge ROM (e.g. a WAD), baked into the .bin.
     set(rom_flag "")
@@ -60,7 +71,7 @@ function(cronopio_add_cartridge name)
                 ${rom_flag}
                 ${ARG_SOURCES}
                 -o "${out}"
-        DEPENDS ${ARG_SOURCES} ${rom_dep}
+        DEPENDS ${ARG_SOURCES} ${rom_dep} $<$<TARGET_EXISTS:cvm-cc>:cvm-cc>
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
         COMMENT "cvm-cc → ${name}.bin"
         VERBATIM)
