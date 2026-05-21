@@ -91,6 +91,59 @@ future ABI lets carts flush mid-frame.
 | `cvm_sys_cron_save_read`   | `i32(u8* dst, i32 len)`         | Read up to 1024 bytes; returns bytes read |
 | `cvm_sys_cron_save_write`  | `i32(const u8* src, i32 len)`   | Write up to 1024 bytes; returns written   |
 
+## Extended graphics (0x100) — sprites, tilemaps, shapes, draw state
+
+A Pyxel-flavoured layer over the core display syscalls. Two design choices
+shape it:
+
+- **Banks are thin handles over cart memory.** `cron_image` / `cron_tilemap`
+  bind a slot to a bitmap/grid that lives in the cart's own RAM or ROM —
+  no upload, no host VRAM. A sprite sheet baked into the cartridge ROM is
+  drawn straight from there.
+- **Draw state is global.** `clip`, `camera` and `pal` affect *every*
+  primitive (including the core `cls`/`pset`/`rect`/`line`/`text` and the
+  blits below). Camera is subtracted from world coordinates; the clip rect
+  is in screen space; `pal` remaps the colour at write time. `cls` is the
+  one exception — it clears the whole framebuffer ignoring the state.
+
+### Resources
+
+| Name                  | Signature                                            | Notes                                                            |
+|-----------------------|------------------------------------------------------|------------------------------------------------------------------|
+| `cvm_sys_cron_image`  | `void(i32 slot, const u8* ptr, i32 w, i32 h)`        | Bind image bank `slot` (0..7) to a w×h 8bpp bitmap in cart memory |
+| `cvm_sys_cron_tilemap`| `void(i32 slot, const u16* ptr, i32 w, i32 h, i32 img)` | Bind tilemap `slot` (0..7): w×h grid of u16 tile indices (0xFFFF = empty) drawn from 8×8 tiles of image bank `img` |
+
+### Sprites & tiles
+
+| Name                | Signature                                                         | Notes                                                          |
+|---------------------|-------------------------------------------------------------------|----------------------------------------------------------------|
+| `cvm_sys_cron_blt`  | `void(i32 img, i32 dx, i32 dy, i32 sx, i32 sy, i32 w, i32 h, i32 colkey)` | Blit (sx,sy,w,h) of image bank `img` to (dx,dy). `colkey` index transparent, −1 = opaque. **Negative w/h flip** (Pyxel convention). |
+| `cvm_sys_cron_bltm` | `void(i32 tm, i32 dx, i32 dy, i32 sx, i32 sy, i32 w, i32 h, i32 colkey)` | Blit a pixel region (sx,sy,w,h) of tilemap `tm` to (dx,dy). `colkey` as `blt`. |
+
+### Shapes (complete the core cls/pset/rect/line/text)
+
+| Name                  | Signature                                              |
+|-----------------------|--------------------------------------------------------|
+| `cvm_sys_cron_rectb`  | `void(i32 x, i32 y, i32 w, i32 h, i32 color)` — outline |
+| `cvm_sys_cron_circ`   | `void(i32 x, i32 y, i32 r, i32 color)` — filled         |
+| `cvm_sys_cron_circb`  | `void(i32 x, i32 y, i32 r, i32 color)` — outline        |
+| `cvm_sys_cron_elli`   | `void(i32 x, i32 y, i32 w, i32 h, i32 color)` — filled  |
+| `cvm_sys_cron_ellib`  | `void(i32 x, i32 y, i32 w, i32 h, i32 color)` — outline  |
+| `cvm_sys_cron_tri`    | `void(i32 x0,y0,x1,y1,x2,y2, i32 color)` — filled       |
+| `cvm_sys_cron_trib`   | `void(i32 x0,y0,x1,y1,x2,y2, i32 color)` — outline      |
+| `cvm_sys_cron_fill`   | `void(i32 x, i32 y, i32 color)` — flood fill            |
+
+### Draw state
+
+| Name                        | Signature                          | Notes                                  |
+|-----------------------------|------------------------------------|----------------------------------------|
+| `cvm_sys_cron_clip`         | `void(i32 x, i32 y, i32 w, i32 h)` | Clip rect (clamped to screen)          |
+| `cvm_sys_cron_clip_reset`   | `void()`                           | Clip = full screen                     |
+| `cvm_sys_cron_camera`       | `void(i32 x, i32 y)`               | Offset subtracted from world coords    |
+| `cvm_sys_cron_camera_reset` | `void()`                           | Camera = (0,0)                         |
+| `cvm_sys_cron_pal`          | `void(i32 c0, i32 c1)`             | Remap draw colour c0 → c1              |
+| `cvm_sys_cron_pal_reset`    | `void()`                           | Identity remap                         |
+
 ## Cartridge ROM
 
 These are **CronoVM built-ins** (auto-bound by the loader, no host handler),

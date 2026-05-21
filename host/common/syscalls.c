@@ -158,7 +158,7 @@ static int sys_cls(struct cvm_image *img, int32_t *r, void *ud) {
     (void)img;
     ctx_t *x = (ctx_t*)ud;
     if (x->c->regions_ok)
-        cron_gpu_cls(x->img->heap, x->c->fb_offset, (int)r[0]);
+        cron_gpu_cls(x->c, x->img->heap, (int)r[0]);
     r[0] = 0;
     return 0;
 }
@@ -167,7 +167,7 @@ static int sys_pset(struct cvm_image *img, int32_t *r, void *ud) {
     (void)img;
     ctx_t *x = (ctx_t*)ud;
     if (x->c->regions_ok)
-        cron_gpu_pset(x->img->heap, x->c->fb_offset, (int)r[0], (int)r[1], (int)r[2]);
+        cron_gpu_pset(x->c, x->img->heap, (int)r[0], (int)r[1], (int)r[2]);
     r[0] = 0;
     return 0;
 }
@@ -176,7 +176,7 @@ static int sys_rect(struct cvm_image *img, int32_t *r, void *ud) {
     (void)img;
     ctx_t *x = (ctx_t*)ud;
     if (x->c->regions_ok)
-        cron_gpu_rect(x->img->heap, x->c->fb_offset,
+        cron_gpu_rect(x->c, x->img->heap,
                       (int)r[0], (int)r[1], (int)r[2], (int)r[3], (int)r[4]);
     r[0] = 0;
     return 0;
@@ -186,7 +186,7 @@ static int sys_line(struct cvm_image *img, int32_t *r, void *ud) {
     (void)img;
     ctx_t *x = (ctx_t*)ud;
     if (x->c->regions_ok)
-        cron_gpu_line(x->img->heap, x->c->fb_offset,
+        cron_gpu_line(x->c, x->img->heap,
                       (int)r[0], (int)r[1], (int)r[2], (int)r[3], (int)r[4]);
     r[0] = 0;
     return 0;
@@ -203,7 +203,7 @@ static int sys_blit(struct cvm_image *img, int32_t *r, void *ud) {
     uint8_t *tmp = (uint8_t*)malloc(n);
     if (!tmp) return -1;
     if (cvm_heap_read(img, src_addr, tmp, n) != CVM_OK) { free(tmp); return -1; }
-    cron_gpu_blit(x->img->heap, x->c->fb_offset, tmp, sw, sh, dx, dy);
+    cron_gpu_blit_raw(x->c, x->img->heap, tmp, sw, sh, dx, dy);
     free(tmp);
     r[0] = 0;
     return 0;
@@ -216,7 +216,7 @@ static int sys_text(struct cvm_image *img, int32_t *r, void *ud) {
     if (!x->c->regions_ok || len <= 0) { r[0] = 0; return 0; }
     char buf[256];
     if (sane_str(img, sa, (uint32_t)len, buf, sizeof(buf)) != 0) return -1;
-    cron_gpu_text(x->img->heap, x->c->fb_offset, buf, (int)strlen(buf),
+    cron_gpu_text(x->c, x->img->heap, buf, (int)strlen(buf),
                   (int)r[2], (int)r[3], (int)r[4]);
     r[0] = 0;
     return 0;
@@ -230,6 +230,97 @@ static int sys_present(struct cvm_image *img, int32_t *r, void *ud) {
     r[0] = 0;
     return 0;
 }
+
+/* ------ extended graphics (0x100): sprites, tilemaps, shapes, state ----- */
+
+#define X ((ctx_t*)ud)
+#define GUARD if (!X->c->regions_ok) { r[0] = 0; return 0; }
+#define HEAP (X->img->heap)
+
+static int sys_image(struct cvm_image *img, int32_t *r, void *ud) {
+    (void)img;
+    cron_gpu_image(X->c, (int)r[0], (uint32_t)r[1], (int)r[2], (int)r[3], X->img->mem_size);
+    r[0] = 0; return 0;
+}
+static int sys_tilemap(struct cvm_image *img, int32_t *r, void *ud) {
+    (void)img;
+    cron_gpu_tilemap(X->c, (int)r[0], (uint32_t)r[1], (int)r[2], (int)r[3], (int)r[4], X->img->mem_size);
+    r[0] = 0; return 0;
+}
+static int sys_blt(struct cvm_image *img, int32_t *r, void *ud) {
+    (void)img; GUARD;
+    cron_gpu_blt(X->c, HEAP, (int)r[0], (int)r[1], (int)r[2], (int)r[3], (int)r[4], (int)r[5], (int)r[6], (int)r[7]);
+    r[0] = 0; return 0;
+}
+static int sys_bltm(struct cvm_image *img, int32_t *r, void *ud) {
+    (void)img; GUARD;
+    cron_gpu_bltm(X->c, HEAP, (int)r[0], (int)r[1], (int)r[2], (int)r[3], (int)r[4], (int)r[5], (int)r[6], (int)r[7]);
+    r[0] = 0; return 0;
+}
+static int sys_rectb(struct cvm_image *img, int32_t *r, void *ud) {
+    (void)img; GUARD;
+    cron_gpu_rectb(X->c, HEAP, (int)r[0], (int)r[1], (int)r[2], (int)r[3], (int)r[4]);
+    r[0] = 0; return 0;
+}
+static int sys_circ(struct cvm_image *img, int32_t *r, void *ud) {
+    (void)img; GUARD;
+    cron_gpu_circ(X->c, HEAP, (int)r[0], (int)r[1], (int)r[2], (int)r[3]);
+    r[0] = 0; return 0;
+}
+static int sys_circb(struct cvm_image *img, int32_t *r, void *ud) {
+    (void)img; GUARD;
+    cron_gpu_circb(X->c, HEAP, (int)r[0], (int)r[1], (int)r[2], (int)r[3]);
+    r[0] = 0; return 0;
+}
+static int sys_elli(struct cvm_image *img, int32_t *r, void *ud) {
+    (void)img; GUARD;
+    cron_gpu_elli(X->c, HEAP, (int)r[0], (int)r[1], (int)r[2], (int)r[3], (int)r[4]);
+    r[0] = 0; return 0;
+}
+static int sys_ellib(struct cvm_image *img, int32_t *r, void *ud) {
+    (void)img; GUARD;
+    cron_gpu_ellib(X->c, HEAP, (int)r[0], (int)r[1], (int)r[2], (int)r[3], (int)r[4]);
+    r[0] = 0; return 0;
+}
+static int sys_tri(struct cvm_image *img, int32_t *r, void *ud) {
+    (void)img; GUARD;
+    cron_gpu_tri(X->c, HEAP, (int)r[0], (int)r[1], (int)r[2], (int)r[3], (int)r[4], (int)r[5], (int)r[6]);
+    r[0] = 0; return 0;
+}
+static int sys_trib(struct cvm_image *img, int32_t *r, void *ud) {
+    (void)img; GUARD;
+    cron_gpu_trib(X->c, HEAP, (int)r[0], (int)r[1], (int)r[2], (int)r[3], (int)r[4], (int)r[5], (int)r[6]);
+    r[0] = 0; return 0;
+}
+static int sys_fill(struct cvm_image *img, int32_t *r, void *ud) {
+    (void)img; GUARD;
+    cron_gpu_fill(X->c, HEAP, (int)r[0], (int)r[1], (int)r[2]);
+    r[0] = 0; return 0;
+}
+static int sys_clip(struct cvm_image *img, int32_t *r, void *ud) {
+    (void)img;
+    cron_gpu_clip(X->c, (int)r[0], (int)r[1], (int)r[2], (int)r[3]);
+    r[0] = 0; return 0;
+}
+static int sys_clip_reset(struct cvm_image *img, int32_t *r, void *ud) {
+    (void)img; cron_gpu_clip_reset(X->c); r[0] = 0; return 0;
+}
+static int sys_camera(struct cvm_image *img, int32_t *r, void *ud) {
+    (void)img; cron_gpu_camera(X->c, (int)r[0], (int)r[1]); r[0] = 0; return 0;
+}
+static int sys_camera_reset(struct cvm_image *img, int32_t *r, void *ud) {
+    (void)img; cron_gpu_camera(X->c, 0, 0); r[0] = 0; return 0;
+}
+static int sys_pal(struct cvm_image *img, int32_t *r, void *ud) {
+    (void)img; cron_gpu_pal(X->c, (int)r[0], (int)r[1]); r[0] = 0; return 0;
+}
+static int sys_pal_reset(struct cvm_image *img, int32_t *r, void *ud) {
+    (void)img; cron_gpu_pal_reset(X->c); r[0] = 0; return 0;
+}
+
+#undef X
+#undef GUARD
+#undef HEAP
 
 /* ------ audio ----------------------------------------------------------- */
 
@@ -366,6 +457,27 @@ static const entry_t kSyscalls[] = {
     /* persistence */
     { "cvm_sys_cron_save_read",    sys_save_read    },
     { "cvm_sys_cron_save_write",   sys_save_write   },
+    /* extended graphics: banks + sprites/tilemaps */
+    { "cvm_sys_cron_image",        sys_image        },
+    { "cvm_sys_cron_tilemap",      sys_tilemap      },
+    { "cvm_sys_cron_blt",          sys_blt          },
+    { "cvm_sys_cron_bltm",         sys_bltm         },
+    /* extended graphics: shapes */
+    { "cvm_sys_cron_rectb",        sys_rectb        },
+    { "cvm_sys_cron_circ",         sys_circ         },
+    { "cvm_sys_cron_circb",        sys_circb        },
+    { "cvm_sys_cron_elli",         sys_elli         },
+    { "cvm_sys_cron_ellib",        sys_ellib        },
+    { "cvm_sys_cron_tri",          sys_tri          },
+    { "cvm_sys_cron_trib",         sys_trib         },
+    { "cvm_sys_cron_fill",         sys_fill         },
+    /* extended graphics: draw state */
+    { "cvm_sys_cron_clip",         sys_clip         },
+    { "cvm_sys_cron_clip_reset",   sys_clip_reset   },
+    { "cvm_sys_cron_camera",       sys_camera       },
+    { "cvm_sys_cron_camera_reset", sys_camera_reset },
+    { "cvm_sys_cron_pal",          sys_pal          },
+    { "cvm_sys_cron_pal_reset",    sys_pal_reset    },
 };
 
 int cronopio_syscalls_install(struct cvm_image* img, cronopio_console_t* c) {

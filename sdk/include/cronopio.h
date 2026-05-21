@@ -82,6 +82,26 @@ extern uint32_t cvm_sys_cron_mouse       (int32_t* out_x, int32_t* out_y);
 extern int32_t  cvm_sys_cron_save_read   (uint8_t* dst, int32_t len);
 extern int32_t  cvm_sys_cron_save_write  (const uint8_t* src, int32_t len);
 
+/* Extended graphics (0x100): banks, sprites, tilemaps, shapes, draw state. */
+extern void     cvm_sys_cron_image       (int32_t slot, const uint8_t* ptr, int32_t w, int32_t h);
+extern void     cvm_sys_cron_tilemap     (int32_t slot, const uint16_t* ptr, int32_t w, int32_t h, int32_t img);
+extern void     cvm_sys_cron_blt         (int32_t img, int32_t dx, int32_t dy, int32_t sx, int32_t sy, int32_t w, int32_t h, int32_t colkey);
+extern void     cvm_sys_cron_bltm        (int32_t tm, int32_t dx, int32_t dy, int32_t sx, int32_t sy, int32_t w, int32_t h, int32_t colkey);
+extern void     cvm_sys_cron_rectb       (int32_t x, int32_t y, int32_t w, int32_t h, int32_t color);
+extern void     cvm_sys_cron_circ        (int32_t x, int32_t y, int32_t r, int32_t color);
+extern void     cvm_sys_cron_circb       (int32_t x, int32_t y, int32_t r, int32_t color);
+extern void     cvm_sys_cron_elli        (int32_t x, int32_t y, int32_t w, int32_t h, int32_t color);
+extern void     cvm_sys_cron_ellib       (int32_t x, int32_t y, int32_t w, int32_t h, int32_t color);
+extern void     cvm_sys_cron_tri         (int32_t x0, int32_t y0, int32_t x1, int32_t y1, int32_t x2, int32_t y2, int32_t color);
+extern void     cvm_sys_cron_trib        (int32_t x0, int32_t y0, int32_t x1, int32_t y1, int32_t x2, int32_t y2, int32_t color);
+extern void     cvm_sys_cron_fill        (int32_t x, int32_t y, int32_t color);
+extern void     cvm_sys_cron_clip        (int32_t x, int32_t y, int32_t w, int32_t h);
+extern void     cvm_sys_cron_clip_reset  (void);
+extern void     cvm_sys_cron_camera      (int32_t x, int32_t y);
+extern void     cvm_sys_cron_camera_reset(void);
+extern void     cvm_sys_cron_pal         (int32_t c0, int32_t c1);
+extern void     cvm_sys_cron_pal_reset   (void);
+
 /* ---------------- User-facing aliases (the `cron_*` names) -------------- */
 
 static inline void     cron_log         (const char* m, int32_t n)        { cvm_sys_cron_log(m, n); }
@@ -116,6 +136,31 @@ static inline uint32_t cron_mouse       (int32_t* x, int32_t* y)          { retu
 
 static inline int32_t  cron_save_read   (uint8_t* d, int32_t n)           { return cvm_sys_cron_save_read(d, n); }
 static inline int32_t  cron_save_write  (const uint8_t* s, int32_t n)     { return cvm_sys_cron_save_write(s, n); }
+
+/* Extended graphics ---------------------------------------------------*/
+/* Register an 8bpp sprite sheet (in RAM or ROM) as image bank `slot`. */
+static inline void     cron_image       (int32_t slot, const uint8_t* ptr, int32_t w, int32_t h) { cvm_sys_cron_image(slot, ptr, w, h); }
+/* Register a w*h grid of u16 tile indices (0xFFFF = empty) as tilemap
+ * `slot`, drawing 8x8 tiles from image bank `img`. */
+static inline void     cron_tilemap     (int32_t slot, const uint16_t* ptr, int32_t w, int32_t h, int32_t img) { cvm_sys_cron_tilemap(slot, ptr, w, h, img); }
+/* Blit (sx,sy,w,h) of image bank `img` to (dx,dy). colkey<0 = opaque;
+ * negative w/h flip. */
+static inline void     cron_blt         (int32_t img, int32_t dx, int32_t dy, int32_t sx, int32_t sy, int32_t w, int32_t h, int32_t colkey) { cvm_sys_cron_blt(img, dx, dy, sx, sy, w, h, colkey); }
+static inline void     cron_bltm        (int32_t tm, int32_t dx, int32_t dy, int32_t sx, int32_t sy, int32_t w, int32_t h, int32_t colkey) { cvm_sys_cron_bltm(tm, dx, dy, sx, sy, w, h, colkey); }
+static inline void     cron_rectb       (int32_t x, int32_t y, int32_t w, int32_t h, int32_t c) { cvm_sys_cron_rectb(x, y, w, h, c); }
+static inline void     cron_circ        (int32_t x, int32_t y, int32_t r, int32_t c) { cvm_sys_cron_circ(x, y, r, c); }
+static inline void     cron_circb       (int32_t x, int32_t y, int32_t r, int32_t c) { cvm_sys_cron_circb(x, y, r, c); }
+static inline void     cron_elli        (int32_t x, int32_t y, int32_t w, int32_t h, int32_t c) { cvm_sys_cron_elli(x, y, w, h, c); }
+static inline void     cron_ellib       (int32_t x, int32_t y, int32_t w, int32_t h, int32_t c) { cvm_sys_cron_ellib(x, y, w, h, c); }
+static inline void     cron_tri         (int32_t x0, int32_t y0, int32_t x1, int32_t y1, int32_t x2, int32_t y2, int32_t c) { cvm_sys_cron_tri(x0, y0, x1, y1, x2, y2, c); }
+static inline void     cron_trib        (int32_t x0, int32_t y0, int32_t x1, int32_t y1, int32_t x2, int32_t y2, int32_t c) { cvm_sys_cron_trib(x0, y0, x1, y1, x2, y2, c); }
+static inline void     cron_fill        (int32_t x, int32_t y, int32_t c) { cvm_sys_cron_fill(x, y, c); }
+static inline void     cron_clip        (int32_t x, int32_t y, int32_t w, int32_t h) { cvm_sys_cron_clip(x, y, w, h); }
+static inline void     cron_clip_reset  (void) { cvm_sys_cron_clip_reset(); }
+static inline void     cron_camera      (int32_t x, int32_t y) { cvm_sys_cron_camera(x, y); }
+static inline void     cron_camera_reset(void) { cvm_sys_cron_camera_reset(); }
+static inline void     cron_pal         (int32_t c0, int32_t c1) { cvm_sys_cron_pal(c0, c1); }
+static inline void     cron_pal_reset   (void) { cvm_sys_cron_pal_reset(); }
 
 /* Video pointers — populated by cron_resolve_video(). Until that is called
  * they are NULL; reading/writing through them then would crash, so always

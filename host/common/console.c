@@ -18,6 +18,7 @@ void cronopio_console_init(cronopio_console_t* c) {
     c->master_vol_q8   = 256;
     c->prng_state      = 0xC0FFEE01u;
     c->frame_fn_index  = -1;
+    cron_gpu_reset_state(c);   /* clip=full screen, camera=0, pal=identity */
 }
 
 void cronopio_console_begin_frame(cronopio_console_t* c) {

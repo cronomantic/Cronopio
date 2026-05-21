@@ -1,47 +1,111 @@
-/* Drawing primitives — convenience helpers that the syscall layer calls.
+/* Drawing primitives + sprite/tilemap blitting — the convenience layer the
+ * syscall dispatch calls. Everything writes into the framebuffer region of
+ * the cart heap at c->fb_offset.
  *
- * All primitives write into the framebuffer region of the cart heap at
- * the offset resolved by the loader (passed in as fb_offset). Cart code
- * can also touch those bytes directly through the memory-mapped region
- * pointer it gets from cvm_sys_get_region("fb"). */
+ * All pixel writes route through put_px(), which applies the global draw
+ * state: camera offset (subtracted from world coords), clip rect, and the
+ * draw-time palette remap. cls() is the one exception — it clears the whole
+ * framebuffer ignoring the draw state. Image/tilemap "banks" are thin
+ * handles over bitmaps the cart owns (in RAM or ROM); blt/bltm read straight
+ * from there. */
 
 #include "console.h"
 
 #include <stdint.h>
 
-void cron_gpu_cls(uint8_t* heap, uint32_t fb_offset, int color) {
-    uint8_t  c  = (uint8_t)(color & 0xFF);
-    uint8_t* fb = heap + fb_offset;
-    for (int i = 0; i < CRONOPIO_FB_BYTES; ++i) fb[i] = c;
+/* ---- state ------------------------------------------------------------- */
+
+void cron_gpu_reset_state(cronopio_console_t* c) {
+    c->draw.clip_x0 = 0;
+    c->draw.clip_y0 = 0;
+    c->draw.clip_x1 = CRONOPIO_SCREEN_W;
+    c->draw.clip_y1 = CRONOPIO_SCREEN_H;
+    c->draw.cam_x = 0;
+    c->draw.cam_y = 0;
+    for (int i = 0; i < 256; ++i) c->draw.pal_map[i] = (uint8_t)i;
 }
 
-void cron_gpu_pset(uint8_t* heap, uint32_t fb_offset, int x, int y, int color) {
-    if ((unsigned)x >= CRONOPIO_SCREEN_W || (unsigned)y >= CRONOPIO_SCREEN_H) return;
-    (heap + fb_offset)[y * CRONOPIO_SCREEN_W + x] = (uint8_t)(color & 0xFF);
+void cron_gpu_clip(cronopio_console_t* c, int x, int y, int w, int h) {
+    int x0 = x, y0 = y, x1 = x + w, y1 = y + h;
+    if (x0 < 0) x0 = 0; if (y0 < 0) y0 = 0;
+    if (x1 > CRONOPIO_SCREEN_W) x1 = CRONOPIO_SCREEN_W;
+    if (y1 > CRONOPIO_SCREEN_H) y1 = CRONOPIO_SCREEN_H;
+    if (x1 < x0) x1 = x0;
+    if (y1 < y0) y1 = y0;
+    c->draw.clip_x0 = x0; c->draw.clip_y0 = y0;
+    c->draw.clip_x1 = x1; c->draw.clip_y1 = y1;
+}
+void cron_gpu_clip_reset(cronopio_console_t* c) {
+    c->draw.clip_x0 = 0; c->draw.clip_y0 = 0;
+    c->draw.clip_x1 = CRONOPIO_SCREEN_W; c->draw.clip_y1 = CRONOPIO_SCREEN_H;
+}
+void cron_gpu_camera(cronopio_console_t* c, int x, int y) {
+    c->draw.cam_x = x; c->draw.cam_y = y;
+}
+void cron_gpu_pal(cronopio_console_t* c, int c0, int c1) {
+    c->draw.pal_map[c0 & 0xFF] = (uint8_t)(c1 & 0xFF);
+}
+void cron_gpu_pal_reset(cronopio_console_t* c) {
+    for (int i = 0; i < 256; ++i) c->draw.pal_map[i] = (uint8_t)i;
 }
 
-void cron_gpu_rect(uint8_t* heap, uint32_t fb_offset, int x, int y, int w, int h, int color) {
+/* ---- the one place pixels are written --------------------------------- */
+
+static inline uint8_t* fb_of(cronopio_console_t* c, uint8_t* heap) {
+    return heap + c->fb_offset;
+}
+
+/* World-space write: apply camera, clip, palette remap. col is a raw index. */
+static inline void put_px(cronopio_console_t* c, uint8_t* fb, int xw, int yw, int col) {
+    int x = xw - c->draw.cam_x;
+    int y = yw - c->draw.cam_y;
+    if (x < c->draw.clip_x0 || x >= c->draw.clip_x1) return;
+    if (y < c->draw.clip_y0 || y >= c->draw.clip_y1) return;
+    fb[y * CRONOPIO_SCREEN_W + x] = c->draw.pal_map[col & 0xFF];
+}
+
+/* ---- basic primitives -------------------------------------------------- */
+
+void cron_gpu_cls(cronopio_console_t* c, uint8_t* heap, int color) {
+    uint8_t  v  = (uint8_t)(color & 0xFF);
+    uint8_t* fb = fb_of(c, heap);
+    for (int i = 0; i < CRONOPIO_FB_BYTES; ++i) fb[i] = v;
+}
+
+void cron_gpu_pset(cronopio_console_t* c, uint8_t* heap, int x, int y, int color) {
+    put_px(c, fb_of(c, heap), x, y, color);
+}
+
+int cron_gpu_pget(cronopio_console_t* c, uint8_t* heap, int x, int y) {
+    int sx = x - c->draw.cam_x, sy = y - c->draw.cam_y;
+    if ((unsigned)sx >= CRONOPIO_SCREEN_W || (unsigned)sy >= CRONOPIO_SCREEN_H) return 0;
+    return fb_of(c, heap)[sy * CRONOPIO_SCREEN_W + sx];
+}
+
+void cron_gpu_rect(cronopio_console_t* c, uint8_t* heap, int x, int y, int w, int h, int color) {
     if (w <= 0 || h <= 0) return;
-    int x0 = x < 0 ? 0 : x;
-    int y0 = y < 0 ? 0 : y;
-    int x1 = x + w; if (x1 > CRONOPIO_SCREEN_W) x1 = CRONOPIO_SCREEN_W;
-    int y1 = y + h; if (y1 > CRONOPIO_SCREEN_H) y1 = CRONOPIO_SCREEN_H;
-    uint8_t  c  = (uint8_t)(color & 0xFF);
-    uint8_t* fb = heap + fb_offset;
-    for (int yy = y0; yy < y1; ++yy) {
-        uint8_t* row = fb + yy * CRONOPIO_SCREEN_W;
-        for (int xx = x0; xx < x1; ++xx) row[xx] = c;
-    }
+    uint8_t* fb = fb_of(c, heap);
+    for (int yy = 0; yy < h; ++yy)
+        for (int xx = 0; xx < w; ++xx)
+            put_px(c, fb, x + xx, y + yy, color);
 }
 
-void cron_gpu_line(uint8_t* heap, uint32_t fb_offset, int x0, int y0, int x1, int y1, int color) {
+void cron_gpu_rectb(cronopio_console_t* c, uint8_t* heap, int x, int y, int w, int h, int color) {
+    if (w <= 0 || h <= 0) return;
+    uint8_t* fb = fb_of(c, heap);
+    for (int xx = 0; xx < w; ++xx) { put_px(c, fb, x+xx, y, color); put_px(c, fb, x+xx, y+h-1, color); }
+    for (int yy = 0; yy < h; ++yy) { put_px(c, fb, x, y+yy, color); put_px(c, fb, x+w-1, y+yy, color); }
+}
+
+void cron_gpu_line(cronopio_console_t* c, uint8_t* heap, int x0, int y0, int x1, int y1, int color) {
+    uint8_t* fb = fb_of(c, heap);
     int dx =  (x1 > x0 ? x1 - x0 : x0 - x1);
     int dy = -(y1 > y0 ? y1 - y0 : y0 - y1);
     int sx = x0 < x1 ? 1 : -1;
     int sy = y0 < y1 ? 1 : -1;
     int err = dx + dy;
     for (;;) {
-        cron_gpu_pset(heap, fb_offset, x0, y0, color);
+        put_px(c, fb, x0, y0, color);
         if (x0 == x1 && y0 == y1) break;
         int e2 = 2 * err;
         if (e2 >= dy) { err += dy; x0 += sx; }
@@ -49,20 +113,136 @@ void cron_gpu_line(uint8_t* heap, uint32_t fb_offset, int x0, int y0, int x1, in
     }
 }
 
-void cron_gpu_blit(uint8_t* heap, uint32_t fb_offset,
-                   const uint8_t* src, int sw, int sh, int dx, int dy) {
-    if (sw <= 0 || sh <= 0) return;
-    int x0 = dx < 0 ? -dx : 0;
-    int y0 = dy < 0 ? -dy : 0;
-    int x1 = sw; if (dx + x1 > CRONOPIO_SCREEN_W) x1 = CRONOPIO_SCREEN_W - dx;
-    int y1 = sh; if (dy + y1 > CRONOPIO_SCREEN_H) y1 = CRONOPIO_SCREEN_H - dy;
-    uint8_t* fb = heap + fb_offset;
-    for (int yy = y0; yy < y1; ++yy) {
-        const uint8_t* srow = src + yy * sw;
-        uint8_t*       drow = fb + (dy + yy) * CRONOPIO_SCREEN_W + dx;
-        for (int xx = x0; xx < x1; ++xx) drow[xx] = (uint8_t)(srow[xx] & 0xFF);
+/* ---- circles / ellipses ----------------------------------------------- */
+
+static void hspan(cronopio_console_t* c, uint8_t* fb, int xa, int xb, int y, int color) {
+    if (xa > xb) { int t = xa; xa = xb; xb = t; }
+    for (int x = xa; x <= xb; ++x) put_px(c, fb, x, y, color);
+}
+
+void cron_gpu_circ(cronopio_console_t* c, uint8_t* heap, int cx, int cy, int r, int color) {
+    if (r < 0) return;
+    uint8_t* fb = fb_of(c, heap);
+    int x = r, y = 0, err = 1 - r;
+    while (x >= y) {
+        hspan(c, fb, cx - x, cx + x, cy + y, color);
+        hspan(c, fb, cx - x, cx + x, cy - y, color);
+        hspan(c, fb, cx - y, cx + y, cy + x, color);
+        hspan(c, fb, cx - y, cx + y, cy - x, color);
+        y++;
+        if (err < 0) err += 2*y + 1;
+        else { x--; err += 2*(y - x) + 1; }
     }
 }
+
+void cron_gpu_circb(cronopio_console_t* c, uint8_t* heap, int cx, int cy, int r, int color) {
+    if (r < 0) return;
+    uint8_t* fb = fb_of(c, heap);
+    int x = r, y = 0, err = 1 - r;
+    while (x >= y) {
+        put_px(c, fb, cx+x, cy+y, color); put_px(c, fb, cx-x, cy+y, color);
+        put_px(c, fb, cx+x, cy-y, color); put_px(c, fb, cx-x, cy-y, color);
+        put_px(c, fb, cx+y, cy+x, color); put_px(c, fb, cx-y, cy+x, color);
+        put_px(c, fb, cx+y, cy-x, color); put_px(c, fb, cx-y, cy-x, color);
+        y++;
+        if (err < 0) err += 2*y + 1;
+        else { x--; err += 2*(y - x) + 1; }
+    }
+}
+
+/* Ellipse inscribed in the (x,y,w,h) box. */
+static void elli_impl(cronopio_console_t* c, uint8_t* fb, int x, int y, int w, int h, int color, int filled) {
+    if (w <= 0 || h <= 0) return;
+    /* Work in a centred coordinate frame with half-axes a,b. */
+    int a = w - 1, b = h - 1;            /* full diameters in pixels - 1 */
+    int cx2 = 2*x + a, cy2 = 2*y + b;    /* 2*center to stay integer for odd/even */
+    /* Midpoint ellipse over the doubled grid. */
+    long aa = (long)a*a, bb = (long)b*b;
+    for (int dy = -b; dy <= b; dy += 2) {
+        /* solve for dx: (dx/a)^2 + (dy/b)^2 <= 1 */
+        long rhs = aa - (aa * (long)dy * dy) / (bb ? bb : 1);
+        if (rhs < 0) continue;
+        /* dx max ~ a*sqrt(rhs)/a ... integer sqrt */
+        long lim = 0; while ((lim+1)*(lim+1) <= rhs) lim++;
+        int cyp = (cy2 + dy) / 2;
+        if (filled) {
+            hspan(c, fb, (cx2 - (int)lim)/2, (cx2 + (int)lim)/2, cyp, color);
+        } else {
+            put_px(c, fb, (cx2 - (int)lim)/2, cyp, color);
+            put_px(c, fb, (cx2 + (int)lim)/2, cyp, color);
+        }
+    }
+}
+void cron_gpu_elli (cronopio_console_t* c, uint8_t* heap, int x, int y, int w, int h, int color) {
+    elli_impl(c, fb_of(c, heap), x, y, w, h, color, 1);
+}
+void cron_gpu_ellib(cronopio_console_t* c, uint8_t* heap, int x, int y, int w, int h, int color) {
+    elli_impl(c, fb_of(c, heap), x, y, w, h, color, 0);
+}
+
+/* ---- triangles --------------------------------------------------------- */
+
+void cron_gpu_trib(cronopio_console_t* c, uint8_t* heap, int x0,int y0,int x1,int y1,int x2,int y2,int color) {
+    cron_gpu_line(c, heap, x0, y0, x1, y1, color);
+    cron_gpu_line(c, heap, x1, y1, x2, y2, color);
+    cron_gpu_line(c, heap, x2, y2, x0, y0, color);
+}
+
+void cron_gpu_tri(cronopio_console_t* c, uint8_t* heap, int x0,int y0,int x1,int y1,int x2,int y2,int color) {
+    uint8_t* fb = fb_of(c, heap);
+    /* sort by y: (x0,y0) top .. (x2,y2) bottom */
+    if (y0 > y1) { int t; t=x0;x0=x1;x1=t; t=y0;y0=y1;y1=t; }
+    if (y0 > y2) { int t; t=x0;x0=x2;x2=t; t=y0;y0=y2;y2=t; }
+    if (y1 > y2) { int t; t=x1;x1=x2;x2=t; t=y1;y1=y2;y2=t; }
+    if (y2 == y0) { hspan(c, fb, (x0<x1?(x0<x2?x0:x2):(x1<x2?x1:x2)),
+                                 (x0>x1?(x0>x2?x0:x2):(x1>x2?x1:x2)), y0, color); return; }
+    for (int y = y0; y <= y2; ++y) {
+        /* xa on edge 0->2 (long edge); xb on 0->1 then 1->2 */
+        int xa = x0 + (int)((long)(x2 - x0) * (y - y0) / (y2 - y0));
+        int xb;
+        if (y < y1 && y1 != y0)
+            xb = x0 + (int)((long)(x1 - x0) * (y - y0) / (y1 - y0));
+        else if (y2 != y1)
+            xb = x1 + (int)((long)(x2 - x1) * (y - y1) / (y2 - y1));
+        else
+            xb = x1;
+        hspan(c, fb, xa, xb, y, color);
+    }
+}
+
+/* ---- flood fill -------------------------------------------------------- */
+
+/* 4-way scanline-ish flood fill in screen space, bounded by the clip rect.
+ * Uses an explicit stack sized to the framebuffer to stay non-recursive. */
+void cron_gpu_fill(cronopio_console_t* c, uint8_t* heap, int x, int y, int color) {
+    uint8_t* fb = fb_of(c, heap);
+    int sx = x - c->draw.cam_x, sy = y - c->draw.cam_y;
+    if (sx < c->draw.clip_x0 || sx >= c->draw.clip_x1) return;
+    if (sy < c->draw.clip_y0 || sy >= c->draw.clip_y1) return;
+    uint8_t target = fb[sy * CRONOPIO_SCREEN_W + sx];
+    uint8_t repl   = c->draw.pal_map[color & 0xFF];
+    if (target == repl) return;
+
+    static int32_t stack[CRONOPIO_FB_BYTES];   /* worst case: every pixel once */
+    int sp = 0;
+    stack[sp++] = sy * CRONOPIO_SCREEN_W + sx;
+    while (sp > 0) {
+        int32_t p = stack[--sp];
+        int px = p % CRONOPIO_SCREEN_W, py = p / CRONOPIO_SCREEN_W;
+        if (px < c->draw.clip_x0 || px >= c->draw.clip_x1) continue;
+        if (py < c->draw.clip_y0 || py >= c->draw.clip_y1) continue;
+        if (fb[p] != target) continue;
+        fb[p] = repl;
+        if (sp <= CRONOPIO_FB_BYTES - 4) {
+            stack[sp++] = p - 1;
+            stack[sp++] = p + 1;
+            stack[sp++] = p - CRONOPIO_SCREEN_W;
+            stack[sp++] = p + CRONOPIO_SCREEN_W;
+        }
+    }
+}
+
+/* ---- text (8x8 font) --------------------------------------------------- */
 
 /* Built-in 8x8 font ROM — printable ASCII 0x20..0x7F (96 glyphs).
  * Public-domain font8x8_basic (Marcel Sondaar / Daniel Hepper). Each glyph
@@ -167,12 +347,9 @@ static const uint8_t font8x8[96][8] = {
     {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00}, /* 0x7F */
 };
 
-/* Render a string with the built-in 8x8 font. Each glyph advances 8 px.
- * Characters outside printable ASCII (0x20..0x7F) render as blank, so
- * control bytes leave a gap rather than garbage. Clipping is per-pixel
- * (via cron_gpu_pset), so partially off-screen text is fine. */
-void cron_gpu_text(uint8_t* heap, uint32_t fb_offset,
+void cron_gpu_text(cronopio_console_t* c, uint8_t* heap,
                    const char* s, int len, int x, int y, int color) {
+    uint8_t* fb = fb_of(c, heap);
     for (int i = 0; i < len; ++i) {
         unsigned char ch = (unsigned char)s[i];
         if (ch < 0x20 || ch > 0x7F) continue;
@@ -181,10 +358,103 @@ void cron_gpu_text(uint8_t* heap, uint32_t fb_offset,
         for (int row = 0; row < 8; ++row) {
             uint8_t bits = glyph[row];
             if (!bits) continue;
-            for (int col = 0; col < 8; ++col) {
-                if (bits & (1u << col))
-                    cron_gpu_pset(heap, fb_offset, gx + col, y + row, color);
-            }
+            for (int col = 0; col < 8; ++col)
+                if (bits & (1u << col)) put_px(c, fb, gx + col, y + row, color);
+        }
+    }
+}
+
+/* Raw blit of an already-extracted host-side bitmap (the legacy cron_blit,
+ * syscall 0x026). No bank, no colorkey; honours the draw state. */
+void cron_gpu_blit_raw(cronopio_console_t* c, uint8_t* heap,
+                       const uint8_t* src, int sw, int sh, int dx, int dy) {
+    if (sw <= 0 || sh <= 0) return;
+    uint8_t* fb = fb_of(c, heap);
+    for (int j = 0; j < sh; ++j)
+        for (int i = 0; i < sw; ++i)
+            put_px(c, fb, dx + i, dy + j, src[j * sw + i]);
+}
+
+/* ---- image / tilemap banks -------------------------------------------- */
+
+int cron_gpu_image(cronopio_console_t* c, int slot, uint32_t offset, int w, int h, uint32_t mem_size) {
+    if ((unsigned)slot >= CRONOPIO_IMAGE_SLOTS) return -1;
+    if (w <= 0 || h <= 0) return -1;
+    uint64_t end = (uint64_t)offset + (uint64_t)w * (uint64_t)h;
+    if (end > mem_size) return -1;
+    c->images[slot].offset = offset;
+    c->images[slot].w = w;
+    c->images[slot].h = h;
+    c->images[slot].used = 1;
+    return 0;
+}
+
+int cron_gpu_tilemap(cronopio_console_t* c, int slot, uint32_t offset, int w, int h, int img, uint32_t mem_size) {
+    if ((unsigned)slot >= CRONOPIO_TILEMAP_SLOTS) return -1;
+    if (w <= 0 || h <= 0) return -1;
+    if ((unsigned)img >= CRONOPIO_IMAGE_SLOTS) return -1;
+    uint64_t end = (uint64_t)offset + (uint64_t)w * (uint64_t)h * 2u;   /* u16 cells */
+    if (end > mem_size) return -1;
+    c->tilemaps[slot].offset = offset;
+    c->tilemaps[slot].w = w;
+    c->tilemaps[slot].h = h;
+    c->tilemaps[slot].img = img;
+    c->tilemaps[slot].used = 1;
+    return 0;
+}
+
+void cron_gpu_blt(cronopio_console_t* c, uint8_t* heap, int img,
+                  int dx, int dy, int sx, int sy, int w, int h, int colkey) {
+    if ((unsigned)img >= CRONOPIO_IMAGE_SLOTS || !c->images[img].used) return;
+    cron_image_bank_t* b = &c->images[img];
+    int fx = 0, fy = 0;
+    if (w < 0) { w = -w; fx = 1; }
+    if (h < 0) { h = -h; fy = 1; }
+    if (w == 0 || h == 0) return;
+    const uint8_t* src = heap + b->offset;
+    uint8_t* fb = fb_of(c, heap);
+    for (int j = 0; j < h; ++j) {
+        int srcy = sy + (fy ? (h - 1 - j) : j);
+        if (srcy < 0 || srcy >= b->h) continue;
+        for (int i = 0; i < w; ++i) {
+            int srcx = sx + (fx ? (w - 1 - i) : i);
+            if (srcx < 0 || srcx >= b->w) continue;
+            uint8_t s = src[srcy * b->w + srcx];
+            if (colkey >= 0 && s == (uint8_t)colkey) continue;
+            put_px(c, fb, dx + i, dy + j, s);
+        }
+    }
+}
+
+void cron_gpu_bltm(cronopio_console_t* c, uint8_t* heap, int tm,
+                   int dx, int dy, int sx, int sy, int w, int h, int colkey) {
+    if ((unsigned)tm >= CRONOPIO_TILEMAP_SLOTS || !c->tilemaps[tm].used) return;
+    cron_tilemap_bank_t* m = &c->tilemaps[tm];
+    if ((unsigned)m->img >= CRONOPIO_IMAGE_SLOTS || !c->images[m->img].used) return;
+    cron_image_bank_t* ib = &c->images[m->img];
+    int tpr = ib->w / CRONOPIO_TILE_SIZE;            /* tiles per row in tileset */
+    if (tpr <= 0) return;
+    if (w <= 0 || h <= 0) return;
+    const uint16_t* cells = (const uint16_t*)(heap + m->offset);
+    const uint8_t*  tiles = heap + ib->offset;
+    uint8_t* fb = fb_of(c, heap);
+    int map_w_px = m->w * CRONOPIO_TILE_SIZE, map_h_px = m->h * CRONOPIO_TILE_SIZE;
+    for (int j = 0; j < h; ++j) {
+        int py = sy + j;
+        if (py < 0 || py >= map_h_px) continue;
+        int cy = py / CRONOPIO_TILE_SIZE, ty = py % CRONOPIO_TILE_SIZE;
+        for (int i = 0; i < w; ++i) {
+            int px = sx + i;
+            if (px < 0 || px >= map_w_px) continue;
+            int cx = px / CRONOPIO_TILE_SIZE, tx = px % CRONOPIO_TILE_SIZE;
+            uint16_t cell = cells[cy * m->w + cx];
+            if (cell == 0xFFFF) continue;            /* empty cell */
+            int til_x = (cell % tpr) * CRONOPIO_TILE_SIZE + tx;
+            int til_y = (cell / tpr) * CRONOPIO_TILE_SIZE + ty;
+            if (til_x >= ib->w || til_y >= ib->h) continue;
+            uint8_t s = tiles[til_y * ib->w + til_x];
+            if (colkey >= 0 && s == (uint8_t)colkey) continue;
+            put_px(c, fb, dx + i, dy + j, s);
         }
     }
 }
