@@ -31,9 +31,12 @@
 #if defined(_WIN32)
 #  include <process.h>
 #  include <direct.h>
+#  include <io.h>
+#  include <windows.h>
 #  define PATH_SEP '\\'
 #  define MKDIR(p) _mkdir(p)
 #else
+#  include <dirent.h>
 #  include <sys/stat.h>
 #  include <sys/wait.h>
 #  include <unistd.h>
@@ -184,26 +187,101 @@ static void usage(FILE *f) {
 
 /* ---- scaffold (`cronopio-cc new <name> [--template=T]`) ---------------- */
 
-/* The curated template set. Each is a directory under the templates root
- * holding (at least) main.c; CMakeLists.txt / README.md / .gitignore are
- * taken from the template, or fall back to the _common directory. */
-static const struct { const char *name, *desc; } TEMPLATES[] = {
+/* Each template is a directory under the templates root holding (at least)
+ * main.c; CMakeLists.txt / README.md / .gitignore are taken from the template
+ * or fall back to the _common directory. Templates are discovered on disk, so
+ * dropping a new directory in (or shipping one in a third-party SDK) just
+ * works. The built-ins carry a one-line blurb and a preferred listing order. */
+static const struct { const char *name, *desc; } BUILTIN[] = {
     { "basic",   "moving box + text (start here)" },
     { "sprites", "an 8x8 sprite moved with the d-pad (image banks, blt)" },
     { "3d",      "a spinning textured cube (the 3D pipeline)" },
 };
-static const int N_TEMPLATES = (int)(sizeof TEMPLATES / sizeof TEMPLATES[0]);
+static const int N_BUILTIN = (int)(sizeof BUILTIN / sizeof BUILTIN[0]);
 
-static int is_known_template(const char *t) {
-    for (int i = 0; i < N_TEMPLATES; ++i)
-        if (strcmp(t, TEMPLATES[i].name) == 0) return 1;
-    return 0;
+#define MAX_TEMPLATES 64
+#define TPL_NAME_MAX  48
+
+static const char *desc_for(const char *name) {
+    for (int i = 0; i < N_BUILTIN; ++i)
+        if (strcmp(name, BUILTIN[i].name) == 0) return BUILTIN[i].desc;
+    return "(custom template)";
 }
 
-static void list_templates(FILE *f) {
+/* Raw enumeration of immediate subdirectories of `root`, skipping "_common",
+ * ".", ".." and dotfiles. Returns count (>=0) or -1 if root can't be opened. */
+static int list_template_dirs(const char *root, char out[][TPL_NAME_MAX], int max) {
+    int n = 0;
+#if defined(_WIN32)
+    char pat[1024];
+    snprintf(pat, sizeof pat, "%s%c*", root, PATH_SEP);
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA(pat, &fd);
+    if (h == INVALID_HANDLE_VALUE) return -1;
+    do {
+        if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) continue;
+        const char *nm = fd.cFileName;
+        if (nm[0] == '.' || strcmp(nm, "_common") == 0) continue;
+        if (n < max) snprintf(out[n++], TPL_NAME_MAX, "%s", nm);
+    } while (FindNextFileA(h, &fd));
+    FindClose(h);
+#else
+    DIR *d = opendir(root);
+    if (!d) return -1;
+    struct dirent *e;
+    while ((e = readdir(d))) {
+        const char *nm = e->d_name;
+        if (nm[0] == '.' || strcmp(nm, "_common") == 0) continue;
+        char p[1024];
+        snprintf(p, sizeof p, "%s/%s", root, nm);
+        struct stat st;
+        if (stat(p, &st) != 0 || !S_ISDIR(st.st_mode)) continue;
+        if (n < max) snprintf(out[n++], TPL_NAME_MAX, "%s", nm);
+    }
+    closedir(d);
+#endif
+    return n;
+}
+
+/* Templates that exist on disk, ordered: built-ins first (in declared order),
+ * then any extra directories discovered. */
+static int available_templates(const char *root, char out[][TPL_NAME_MAX], int max) {
+    char disk[MAX_TEMPLATES][TPL_NAME_MAX];
+    int nd = list_template_dirs(root, disk, MAX_TEMPLATES);
+    if (nd < 0) nd = 0;
+    int n = 0;
+    for (int i = 0; i < N_BUILTIN && n < max; ++i)
+        for (int j = 0; j < nd; ++j)
+            if (strcmp(BUILTIN[i].name, disk[j]) == 0) {
+                snprintf(out[n++], TPL_NAME_MAX, "%s", disk[j]);
+                break;
+            }
+    for (int j = 0; j < nd && n < max; ++j) {
+        int known = 0;
+        for (int i = 0; i < N_BUILTIN; ++i)
+            if (strcmp(BUILTIN[i].name, disk[j]) == 0) { known = 1; break; }
+        if (!known) snprintf(out[n++], TPL_NAME_MAX, "%s", disk[j]);
+    }
+    return n;
+}
+
+static void list_templates(FILE *f, const char *root) {
+    char names[MAX_TEMPLATES][TPL_NAME_MAX];
+    int n = available_templates(root, names, MAX_TEMPLATES);
+    if (n == 0) {
+        fprintf(f, "No templates found under %s\n", root);
+        return;
+    }
     fprintf(f, "Available templates:\n");
-    for (int i = 0; i < N_TEMPLATES; ++i)
-        fprintf(f, "  %-9s %s\n", TEMPLATES[i].name, TEMPLATES[i].desc);
+    for (int i = 0; i < n; ++i)
+        fprintf(f, "  %-9s %s\n", names[i], desc_for(names[i]));
+}
+
+/* A template is valid if <root>/<name>/main.c exists. */
+static int template_exists(const char *root, const char *name) {
+    char p[1024];
+    snprintf(p, sizeof p, "%s%c%s%cmain.c", root, PATH_SEP, name, PATH_SEP);
+    return file_exists(p);
 }
 
 /* Resolve the templates root: --templates > install layout > CMake bake. */
@@ -285,25 +363,29 @@ static int scaffold(int argc, char **argv) {
         else { fprintf(stderr, "cronopio-cc: new: unexpected argument '%s'\n", a); return 2; }
     }
 
-    if (do_list) { list_templates(stdout); return 0; }
+    char *templates = find_templates_dir(templates_override, argv[0]);
+
+    if (do_list) { list_templates(stdout, templates); free(templates); return 0; }
     if (!name || !*name) {
         fprintf(stderr, "cronopio-cc: new: missing project name\n"
-                        "usage: cronopio-cc new <name> [--template=basic|sprites|3d]\n");
+                        "usage: cronopio-cc new <name> [--template=NAME]\n");
+        free(templates);
         return 2;
     }
 
     /* Pick a template: explicit flag, else interactive prompt on a TTY, else
-     * 'basic'. */
-    char chosen[32];
+     * 'basic'. Validation is against what's actually on disk. */
+    char chosen[TPL_NAME_MAX];
     if (tpl) {
-        if (!is_known_template(tpl)) {
+        if (!template_exists(templates, tpl)) {
             fprintf(stderr, "cronopio-cc: unknown template '%s'\n", tpl);
-            list_templates(stderr);
+            list_templates(stderr, templates);
+            free(templates);
             return 2;
         }
         snprintf(chosen, sizeof chosen, "%s", tpl);
     } else if (ISATTY(FILENO(stdin)) && ISATTY(FILENO(stdout))) {
-        list_templates(stdout);
+        list_templates(stdout, templates);
         printf("Template [basic]: ");
         fflush(stdout);
         char line[64];
@@ -311,8 +393,8 @@ static int scaffold(int argc, char **argv) {
             size_t n = strlen(line);
             while (n && (line[n-1] == '\n' || line[n-1] == '\r' || line[n-1] == ' ')) line[--n] = 0;
             if (n == 0) snprintf(chosen, sizeof chosen, "basic");
-            else if (is_known_template(line)) snprintf(chosen, sizeof chosen, "%s", line);
-            else { fprintf(stderr, "cronopio-cc: unknown template '%s'\n", line); return 2; }
+            else if (template_exists(templates, line)) snprintf(chosen, sizeof chosen, "%s", line);
+            else { fprintf(stderr, "cronopio-cc: unknown template '%s'\n", line); free(templates); return 2; }
         } else {
             snprintf(chosen, sizeof chosen, "basic");
         }
@@ -320,7 +402,11 @@ static int scaffold(int argc, char **argv) {
         snprintf(chosen, sizeof chosen, "basic");
     }
 
-    char *templates = find_templates_dir(templates_override, argv[0]);
+    if (!template_exists(templates, chosen)) {
+        fprintf(stderr, "cronopio-cc: template '%s' not found under %s\n", chosen, templates);
+        free(templates);
+        return 1;
+    }
 
     if (MKDIR(name) != 0 && errno != EEXIST) {
         fprintf(stderr, "cronopio-cc: cannot create %s: %s\n", name, strerror(errno));
