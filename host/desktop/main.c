@@ -1,9 +1,14 @@
-/* Cronopio desktop host — SDL2 shell.
+/* Cronopio desktop/web host — SDL2 shell.
  *
  *   1. Slurp the .bin from disk, hand it to cvm_load.
  *   2. Resolve the fb/pal host regions and install Cronopio's syscalls.
  *   3. Run the cart's entry once (it registers a frame fn via cron_set_frame).
- *   4. Each 1/60 s: poll input, cvm_call the frame fn, blit FB, mix audio. */
+ *   4. Each 1/60 s: poll input, cvm_call the frame fn, blit FB, mix audio.
+ *
+ * The per-frame work lives in frame_step() so both the native blocking
+ * loop and Emscripten's requestAnimationFrame-driven callback can share it.
+ * Under Emscripten there is no blocking main loop — emscripten_set_main_loop
+ * calls frame_step() once per browser animation frame. */
 
 #include "console.h"
 #include "syscalls.h"
@@ -14,6 +19,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+#endif
+
 #define SCALE 3
 
 /* Exposed for sys_time_ms in host/common/syscalls.c — kept here so the
@@ -21,6 +30,17 @@
 uint64_t cronopio_platform_ticks_ms(void) {
     return (uint64_t)SDL_GetTicks();
 }
+
+/* Everything the per-frame step needs. Lives on main()'s stack; a pointer
+ * is handed to the loop driver. */
+typedef struct {
+    cronopio_console_t *console;
+    struct cvm_image   *img;
+    SDL_Renderer       *ren;
+    SDL_Texture        *tex;
+    uint32_t           *rgba;
+    int                 running;
+} app_t;
 
 static uint32_t map_keys_to_pad(const Uint8* keys) {
     uint32_t m = 0;
@@ -52,6 +72,61 @@ static uint8_t* slurp(const char* path, size_t* out_len) {
     if (got != (size_t)n) { free(buf); return NULL; }
     *out_len = (size_t)n;
     return buf;
+}
+
+/* One frame: poll input, run the cart's frame fn, blit, present. Called by
+ * the native while-loop and by emscripten_set_main_loop. */
+static void frame_step(void* arg) {
+    app_t* a = (app_t*)arg;
+    cronopio_console_t* console = a->console;
+
+    SDL_Event ev;
+    while (SDL_PollEvent(&ev)) {
+        if (ev.type == SDL_QUIT) a->running = 0;
+        if (ev.type == SDL_KEYDOWN && ev.key.keysym.sym == SDLK_ESCAPE) a->running = 0;
+        if (ev.type == SDL_MOUSEMOTION) {
+            console->mouse_x = ev.motion.x / SCALE;
+            console->mouse_y = ev.motion.y / SCALE;
+        }
+        if (ev.type == SDL_MOUSEBUTTONDOWN || ev.type == SDL_MOUSEBUTTONUP) {
+            uint32_t bit = (ev.button.button == SDL_BUTTON_LEFT) ? 1u : 2u;
+            if (ev.type == SDL_MOUSEBUTTONDOWN) console->mouse_buttons |=  bit;
+            else                                console->mouse_buttons &= ~bit;
+        }
+    }
+
+    cronopio_console_begin_frame(console);
+    const Uint8* keys = SDL_GetKeyboardState(NULL);
+    console->pad_cur[0] = map_keys_to_pad(keys);
+    /* Snapshot scancodes for cron_key (low 256 cover standard keyboards). */
+    for (int i = 0; i < 32; ++i) {
+        uint8_t byte = 0;
+        for (int b = 0; b < 8; ++b)
+            if (keys[(i<<3) + b]) byte |= (uint8_t)(1u << b);
+        console->keys[i] = byte;
+    }
+
+    if (console->frame_fn_index > 0) {
+        int32_t fret = 0;
+        int rc = cvm_call(a->img, (uint32_t)console->frame_fn_index, NULL, 0, &fret);
+        if (rc != CVM_OK && rc != CVM_E_SYSCALL_TRAP) {
+            fprintf(stderr, "frame trap: %s\n", cvm_strerror(rc));
+            a->running = 0;
+        }
+    }
+
+    cronopio_console_blit_rgba(console, a->img->heap, a->rgba);
+    SDL_UpdateTexture(a->tex, NULL, a->rgba, CRONOPIO_SCREEN_W * 4);
+    SDL_RenderClear(a->ren);
+    SDL_RenderCopy(a->ren, a->tex, NULL, NULL);
+    SDL_RenderPresent(a->ren);
+
+    cronopio_console_end_frame(console);
+
+#ifdef __EMSCRIPTEN__
+    if (!a->running || console->cart_exited)
+        emscripten_cancel_main_loop();
+#endif
 }
 
 int main(int argc, char** argv) {
@@ -112,7 +187,8 @@ int main(int argc, char** argv) {
     if (dev) SDL_PauseAudioDevice(dev, 0);
 
     /* Run the cart's entry. It is expected to call cron_set_frame(fn) and
-     * return; we then drive that fn ourselves every tick. */
+     * return; we then drive that fn ourselves every tick. This call is
+     * short (no blocking), so it needs no ASYNCIFY under Emscripten. */
     int32_t entry_ret = 0;
     rc = cvm_run(&img, &entry_ret);
     if (rc != CVM_OK && rc != CVM_E_SYSCALL_TRAP) {
@@ -120,55 +196,27 @@ int main(int argc, char** argv) {
         goto teardown;
     }
 
-    uint32_t* rgba = (uint32_t*)malloc((size_t)CRONOPIO_FB_BYTES * 4);
+    static app_t app;
+    app.console = &console;
+    app.img     = &img;
+    app.ren     = ren;
+    app.tex     = tex;
+    app.rgba    = (uint32_t*)malloc((size_t)CRONOPIO_FB_BYTES * 4);
+    app.running = 1;
 
-    int running = 1;
-    while (running && !console.cart_exited) {
-        SDL_Event ev;
-        while (SDL_PollEvent(&ev)) {
-            if (ev.type == SDL_QUIT) running = 0;
-            if (ev.type == SDL_KEYDOWN && ev.key.keysym.sym == SDLK_ESCAPE) running = 0;
-            if (ev.type == SDL_MOUSEMOTION) {
-                console.mouse_x = ev.motion.x / SCALE;
-                console.mouse_y = ev.motion.y / SCALE;
-            }
-            if (ev.type == SDL_MOUSEBUTTONDOWN || ev.type == SDL_MOUSEBUTTONUP) {
-                uint32_t bit = (ev.button.button == SDL_BUTTON_LEFT) ? 1u : 2u;
-                if (ev.type == SDL_MOUSEBUTTONDOWN) console.mouse_buttons |=  bit;
-                else                                console.mouse_buttons &= ~bit;
-            }
-        }
-        cronopio_console_begin_frame(&console);
-        const Uint8* keys = SDL_GetKeyboardState(NULL);
-        console.pad_cur[0] = map_keys_to_pad(keys);
-        /* Snapshot scancodes for cron_key. SDL exposes ~512 scancodes;
-         * we keep the low 256 (covers all standard keyboards). */
-        for (int i = 0; i < 32; ++i) {
-            uint8_t byte = 0;
-            for (int b = 0; b < 8; ++b)
-                if (keys[(i<<3) + b]) byte |= (uint8_t)(1u << b);
-            console.keys[i] = byte;
-        }
+#ifdef __EMSCRIPTEN__
+    /* No blocking loop in the browser: hand the step to the event loop.
+     * fps=0 → drive from requestAnimationFrame (matches the display, ~60 Hz);
+     * simulate_infinite_loop=1 → this call does not return, so teardown
+     * below is unreachable on web (the page lifecycle reclaims everything). */
+    emscripten_set_main_loop_arg(frame_step, &app, 0, 1);
+#else
+    while (app.running && !console.cart_exited)
+        frame_step(&app);
 
-        if (console.frame_fn_index > 0) {
-            int32_t fret = 0;
-            rc = cvm_call(&img, (uint32_t)console.frame_fn_index, NULL, 0, &fret);
-            if (rc != CVM_OK && rc != CVM_E_SYSCALL_TRAP) {
-                fprintf(stderr, "frame trap: %s\n", cvm_strerror(rc));
-                running = 0;
-            }
-        }
+    free(app.rgba);
+#endif
 
-        cronopio_console_blit_rgba(&console, img.heap, rgba);
-        SDL_UpdateTexture(tex, NULL, rgba, CRONOPIO_SCREEN_W * 4);
-        SDL_RenderClear(ren);
-        SDL_RenderCopy(ren, tex, NULL, NULL);
-        SDL_RenderPresent(ren);
-
-        cronopio_console_end_frame(&console);
-    }
-
-    free(rgba);
 teardown:
     if (dev) SDL_CloseAudioDevice(dev);
     SDL_DestroyTexture(tex);

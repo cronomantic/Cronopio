@@ -66,7 +66,7 @@ Add `external/CronoVM/build/tools/cvm-cc` to PATH so
 `cronopio_add_cartridge()` (which does `find_program(CVM_CC cvm-cc)`)
 picks it up automatically.
 
-## Running
+## Running (desktop)
 
 The desktop host needs SDL2. With SDL2 discoverable by CMake the build
 produces `build/host/desktop/cronopio[.exe]`:
@@ -77,3 +77,35 @@ produces `build/host/desktop/cronopio[.exe]`:
 
 Without SDL2 the desktop target is skipped (by design); the portable
 runtime `cronopio_common` and CronoVM still build.
+
+## Web (Emscripten)
+
+The web host reuses `host/desktop/main.c` — under `__EMSCRIPTEN__` it drives
+the frame loop with `emscripten_set_main_loop` (a requestAnimationFrame
+callback) instead of the native blocking `while`. Emscripten ships an SDL2
+port, so no separate SDL install is needed.
+
+Requires the Emscripten SDK (`emcc`/`emcmake` on PATH). Configure with the
+Emscripten toolchain and the web target:
+
+```sh
+emcmake cmake -B build-web -S . -DCRONOPIO_TARGET_DESKTOP=OFF -DCRONOPIO_TARGET_WEB=ON
+cmake --build build-web
+```
+
+This emits `build-web/host/web/cronopio.{html,js,wasm}`. The page fetches a
+cartridge named `cart.bin` from the same directory at load time, so serve it
+over HTTP (a `file://` open can't fetch):
+
+```sh
+cp hello.bin build-web/host/web/cart.bin
+python -m http.server -d build-web/host/web 8000
+# open http://localhost:8000/cronopio.html
+```
+
+Notes:
+- Browsers gate audio behind a user gesture; sound stays silent until the
+  first click/keypress on the page. That's browser policy, not a host bug.
+- The build deliberately omits `-sASYNCIFY`: nothing in the host blocks
+  (the cart entry returns promptly and the loop is a rAF callback), so the
+  wasm stays small and frame cost predictable.
