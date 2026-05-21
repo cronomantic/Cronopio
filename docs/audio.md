@@ -37,40 +37,42 @@ full control):
 | `cron_snd_stop`      | `void(i32 v)`                                                  | Hard stop |
 | `cron_snd_master`    | `void(i32 vol_q8)`                                             | Master volume 0..256 |
 
-## Layer 2 — SFX (data-driven sounds)  *(planned, builds on Layer 1)*
+## Layer 2 — sound effects
 
-A **sound** is a compact step array in cart memory, à la Pyxel: each step is
-`{note, wave, volume, effect}`; the sound has a `speed` (ticks per step).
-The host sequencer advances it and writes the voice each step.
+SFX are triggered directly on a free voice: `cron_pcm` for a one-shot PCM
+sample (explosions, voice, percussion — what DOOM's SFX are) and
+`cron_snd_tone` + `cron_env` for synth blips. No separate sound-data format
+is needed; the voice layer is the SFX layer. (A Pyxel-style step sequencer
+for synth "sounds" could be added later, but music is the bigger need and is
+covered by MOD below.)
 
-| Name            | Signature                                          |
-|-----------------|----------------------------------------------------|
-| `cron_sfx`      | `void(i32 slot, const u8* steps, i32 n, i32 speed)`|
-| `cron_sfx_play` | `void(i32 slot, i32 voice)`                        |
+## Layer 3 — music: MOD playback
 
-Step bytes: `note` (0 = rest, 1..96 = semitone, 255 = note-off), `wave`
-(0..4), `volume` (0..15), `effect` (0 none, 1 fade, 2 slide↑, 3 slide↓,
-4 vibrato). PCM one-shots are triggered with `cron_pcm` directly (or a
-sample-backed sound).
+Music is a **ProTracker `.mod`** file, played by a host-side player that
+parses the blob (in cart RAM or ROM) and drives voices 0..n_channels-1.
+MOD samples are 8-bit signed mono — exactly the voice PCM format — so the
+player just points voices at the sample bytes inside the blob and steps by
+the Amiga period. SFX use the voices above the module's channel count.
 
-## Layer 3 — music (patterns)  *(planned, builds on Layer 2)*
+| Name              | Signature                                        | Notes |
+|-------------------|--------------------------------------------------|-------|
+| `cron_mod_play`   | `i32(const void* mod, i32 len, i32 loop)`        | Parse + start a .mod; returns 0 / -1 (not a MOD). Uses voices 0..n_channels-1. |
+| `cron_mod_stop`   | `void()`                                         | Stop and fade the module's voices. |
 
-A **music** is a set of tracks; each track is a voice plus a sequence of
-sound IDs played in order. The host advances all tracks together and loops.
-
-| Name              | Signature                          |
-|-------------------|------------------------------------|
-| `cron_music`      | `void(i32 slot, const u8* blob)`   |
-| `cron_music_play` | `void(i32 slot, i32 loop)`         |
-| `cron_music_stop` | `void()`                           |
+Supported: 4/6/8-channel modules, sample sustain loops, and the common
+effects `Cxx` (set volume), `Fxx` (speed/tempo), `Bxx` (position jump),
+`Dxx` (pattern break), `9xx` (sample offset), `Axy` (volume slide). Other
+effects are ignored for now (the note still plays). MIDI is **deferred** —
+it needs an instrument synth (FM/OPL or a GM sample bank); the path there is
+a future FM voice mode, or converting MIDI to MOD/patterns offline.
 
 ## Syscall range
 
-`0x200–0x2FF` — extended audio. `0x200` block = Layer 1 (samples + voices),
-`0x210` block = SFX, `0x220` block = music.
+`0x200–0x2FF` — extended audio. `0x200` block = Layer 1 (samples + voices)
+and SFX triggers; `0x220` block = MOD music.
 
 ## Status
 
-Layer 1 (voices: synth + PCM + ADSR, sample banks, direct triggers) is
-implemented and is what DOOM-class PCM SFX need. Layers 2–3 (the data-driven
-SFX/music sequencer) are specified here and land next.
+Implemented: Layer 1 voices (synth + PCM + ADSR, sample banks), SFX as direct
+triggers, and the MOD player (Layer 3). MIDI/FM is the remaining audio item,
+deferred until a cart needs it.

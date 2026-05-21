@@ -109,6 +109,14 @@ static int env_tick(cron_voice_t* v) {
 void cronopio_console_mix(cronopio_console_t* c, int16_t* dst, int frames) {
     const int sr = CRONOPIO_AUDIO_HZ;
     for (int i = 0; i < frames; ++i) {
+        /* Advance the MOD player at its tick rate. */
+        if (c->mod.playing) {
+            if (--c->mod.sample_counter <= 0) {
+                cron_mod_tick(c);
+                c->mod.sample_counter = c->mod.samples_per_tick;
+            }
+        }
+
         int32_t mix_l = 0, mix_r = 0;
         for (int vi = 0; vi < CRONOPIO_AUDIO_CHANS; ++vi) {
             cron_voice_t* voice = &c->voices[vi];
@@ -116,15 +124,21 @@ void cronopio_console_mix(cronopio_console_t* c, int16_t* dst, int frames) {
 
             int32_t sample;   /* roughly -16384..16384 */
             if (voice->mode == 1) {
-                /* PCM: 8-bit signed mono, resampled by pcm_step (Q16.16). */
-                const cron_sample_bank_t* sb = &c->samples[voice->sample];
-                if (!sb->used || !c->heap) { voice->active = 0; continue; }
+                /* PCM: 8-bit signed mono, resampled by pcm_step (Q16.16),
+                 * with an optional sub-region sustain loop. */
+                if (!c->heap) { voice->active = 0; continue; }
                 uint32_t idx = voice->pcm_pos >> 16;
-                if (idx >= sb->len) {
-                    if (voice->loop && sb->len) { voice->pcm_pos %= ((uint32_t)sb->len << 16); idx = voice->pcm_pos >> 16; }
-                    else { voice->active = 0; continue; }
+                uint32_t end = voice->pcm_looplen
+                             ? (voice->pcm_loopstart + voice->pcm_looplen)
+                             : voice->pcm_len;
+                if (idx >= end) {
+                    if (voice->pcm_looplen) {
+                        voice->pcm_pos -= (uint32_t)voice->pcm_looplen << 16;
+                        idx = voice->pcm_pos >> 16;
+                    } else { voice->active = 0; continue; }
                 }
-                int8_t s8 = (int8_t)c->heap[sb->offset + idx];
+                if (idx >= voice->pcm_len) { voice->active = 0; continue; }
+                int8_t s8 = (int8_t)c->heap[voice->pcm_off + idx];
                 sample = (int32_t)s8 << 7;        /* -128..127 -> ~-16384..16256 */
                 voice->pcm_pos += voice->pcm_step;
             } else {

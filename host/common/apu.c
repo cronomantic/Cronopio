@@ -31,13 +31,16 @@ void cron_apu_pcm(cronopio_console_t* c, int ch, int slot,
     if ((unsigned)ch >= CRONOPIO_AUDIO_CHANS) return;
     if ((unsigned)slot >= CRONOPIO_SAMPLE_SLOTS || !c->samples[slot].used) return;
     cron_voice_t* v = &c->voices[ch];
+    const cron_sample_bank_t* sb = &c->samples[slot];
     /* native advance per output sample, then scaled by pitch (Q16.16). */
-    uint32_t native = (uint32_t)(((uint64_t)c->samples[slot].rate << 16) / CRONOPIO_AUDIO_HZ);
-    v->mode     = 1;
-    v->sample   = slot;
-    v->pcm_pos  = 0;
-    v->pcm_step = (uint32_t)(((uint64_t)native * (uint64_t)(uint32_t)pitch_q16) >> 16);
-    v->loop     = loop ? 1 : 0;
+    uint32_t native = (uint32_t)(((uint64_t)sb->rate << 16) / CRONOPIO_AUDIO_HZ);
+    v->mode          = 1;
+    v->pcm_off       = sb->offset;
+    v->pcm_len       = sb->len;
+    v->pcm_loopstart = 0;
+    v->pcm_looplen   = loop ? sb->len : 0;   /* whole-sample loop, or one-shot */
+    v->pcm_pos       = 0;
+    v->pcm_step      = (uint32_t)(((uint64_t)native * (uint64_t)(uint32_t)pitch_q16) >> 16);
     v->vol      = clampi(vol, 0, 255);
     v->pan      = clampi(pan, -128, 127);
     v->active   = 1;

@@ -4,6 +4,7 @@ add_library(cronopio_common STATIC
     common/gpu.c
     common/poly.c
     common/apu.c
+    common/mod.c
     common/input.c
 )
 target_include_directories(cronopio_common PUBLIC common)
