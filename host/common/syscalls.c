@@ -318,6 +318,43 @@ static int sys_pal_reset(struct cvm_image *img, int32_t *r, void *ud) {
     (void)img; cron_gpu_pal_reset(X->c); r[0] = 0; return 0;
 }
 
+/* Rotozoom blit. sx/sy and w/h arrive packed (the SDK packs them) so the
+ * call fits the 8-arg syscall ABI: src=(sx<<16)|sy, dim=(w<<16)|h. */
+static int sys_blt_ex(struct cvm_image *img, int32_t *r, void *ud) {
+    (void)img; GUARD;
+    uint32_t src = (uint32_t)r[3], dim = (uint32_t)r[4];
+    int sx = (int)(src >> 16),  sy = (int)(src & 0xFFFF);
+    int w  = (int)(dim >> 16),  h  = (int)(dim & 0xFFFF);
+    cron_gpu_blt_ex(X->c, HEAP, (int)r[0], (int)r[1], (int)r[2],
+                    sx, sy, w, h, (int)r[5], (int)r[6], (int)r[7]);
+    r[0] = 0; return 0;
+}
+
+static int sys_cmap(struct cvm_image *img, int32_t *r, void *ud) {
+    uint32_t ptr = (uint32_t)r[0];
+    if (ptr == 0) { cron_gpu_cmap(X->c, 0, 0); r[0] = 0; return 0; }
+    if ((uint64_t)ptr + 256u > img->mem_size) { cron_gpu_cmap(X->c, 0, 0); r[0] = 0; return 0; }
+    cron_gpu_cmap(X->c, ptr, 1);
+    r[0] = 0; return 0;
+}
+
+static int sys_tcol(struct cvm_image *img, int32_t *r, void *ud) {
+    GUARD;
+    uint32_t src = (uint32_t)r[3];
+    uint32_t mask = (uint32_t)r[4];
+    if ((uint64_t)src + (uint64_t)mask + 1u > img->mem_size) { r[0] = 0; return 0; }
+    cron_gpu_tcol(X->c, HEAP, (int)r[0], (int)r[1], (int)r[2], src, (int)mask, r[5], r[6]);
+    r[0] = 0; return 0;
+}
+
+static int sys_tspan(struct cvm_image *img, int32_t *r, void *ud) {
+    GUARD;
+    uint32_t src = (uint32_t)r[3];
+    if ((uint64_t)src + 4096u > img->mem_size) { r[0] = 0; return 0; }
+    cron_gpu_tspan(X->c, HEAP, (int)r[0], (int)r[1], (int)r[2], src, r[4], r[5], r[6], r[7]);
+    r[0] = 0; return 0;
+}
+
 #undef X
 #undef GUARD
 #undef HEAP
@@ -478,6 +515,11 @@ static const entry_t kSyscalls[] = {
     { "cvm_sys_cron_camera_reset", sys_camera_reset },
     { "cvm_sys_cron_pal",          sys_pal          },
     { "cvm_sys_cron_pal_reset",    sys_pal_reset    },
+    /* extended graphics: rotozoom + software-3D rasteriser accelerators */
+    { "cvm_sys_cron_blt_ex",       sys_blt_ex       },
+    { "cvm_sys_cron_cmap",         sys_cmap         },
+    { "cvm_sys_cron_tcol",         sys_tcol         },
+    { "cvm_sys_cron_tspan",        sys_tspan        },
 };
 
 int cronopio_syscalls_install(struct cvm_image* img, cronopio_console_t* c) {

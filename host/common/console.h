@@ -71,6 +71,12 @@ typedef struct {
     cron_image_bank_t   images[CRONOPIO_IMAGE_SLOTS];
     cron_tilemap_bank_t tilemaps[CRONOPIO_TILEMAP_SLOTS];
 
+    /* Active colormap for the textured-rasteriser accelerators (tcol/tspan):
+     * a 256-byte remap in cart memory (e.g. a DOOM light colormap). When
+     * cmap_set is 0 the accelerators write source indices unremapped. */
+    uint32_t cmap_offset;
+    int      cmap_set;
+
     /* audio */
     cron_voice_t voices[CRONOPIO_AUDIO_CHANS];
     int          master_vol_q8;                  /* 0..256 */
@@ -178,5 +184,31 @@ void cron_gpu_blt (cronopio_console_t* c, uint8_t* heap, int img,
 /* Blit a pixel region (sx,sy,w,h) of tilemap `tm` to (dx,dy). colkey as blt. */
 void cron_gpu_bltm(cronopio_console_t* c, uint8_t* heap, int tm,
                    int dx, int dy, int sx, int sy, int w, int h, int colkey);
+
+/* Rotozoom blit: like blt, but the sprite is scaled (scale_q16, Q16.16,
+ * 0x10000 = 1.0) and rotated (rotate_deg, clockwise) around its centre,
+ * which is placed at (dx + w/2, dy + h/2). Nearest-neighbour sampling. */
+void cron_gpu_blt_ex(cronopio_console_t* c, uint8_t* heap, int img,
+                     int dx, int dy, int sx, int sy, int w, int h,
+                     int colkey, int rotate_deg, int scale_q16);
+
+/* --- Textured-rasteriser accelerators (the perf escape hatch for
+ * software 3D — DOOM's R_DrawColumn / R_DrawSpan in native C). They honour
+ * the clip rect but ignore camera and the draw palette: the active colormap
+ * (cron_gpu_cmap) is the only remap, matching DOOM's light-diminishing. --- */
+
+/* Set the active 256-byte colormap (heap offset); set=0 selects identity. */
+void cron_gpu_cmap(cronopio_console_t* c, uint32_t offset, int set);
+
+/* Vertical textured column at screen x, rows [y0,y1]. Source is a column of
+ * (mask+1) bytes (mask = height-1, power of two); the texture coordinate is
+ * frac (Q16.16) advancing by step per row. fb = cmap[src[(frac>>16)&mask]]. */
+void cron_gpu_tcol(cronopio_console_t* c, uint8_t* heap, int x, int y0, int y1,
+                   uint32_t src_off, int mask, int32_t frac, int32_t step);
+
+/* Horizontal textured span at screen y, cols [x0,x1], over a 64x64 source.
+ * (u,v) Q16.16 advance by (du,dv); index = ((v>>16)&63)*64 + ((u>>16)&63). */
+void cron_gpu_tspan(cronopio_console_t* c, uint8_t* heap, int y, int x0, int x1,
+                    uint32_t src_off, int32_t u, int32_t v, int32_t du, int32_t dv);
 
 #endif

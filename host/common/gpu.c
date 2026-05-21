@@ -12,6 +12,7 @@
 #include "console.h"
 
 #include <stdint.h>
+#include <math.h>
 
 /* ---- state ------------------------------------------------------------- */
 
@@ -426,6 +427,46 @@ void cron_gpu_blt(cronopio_console_t* c, uint8_t* heap, int img,
     }
 }
 
+void cron_gpu_blt_ex(cronopio_console_t* c, uint8_t* heap, int img,
+                     int dx, int dy, int sx, int sy, int w, int h,
+                     int colkey, int rotate_deg, int scale_q16) {
+    if ((unsigned)img >= CRONOPIO_IMAGE_SLOTS || !c->images[img].used) return;
+    if (w <= 0 || h <= 0 || scale_q16 == 0) return;
+    cron_image_bank_t* b = &c->images[img];
+    const uint8_t* src = heap + b->offset;
+    uint8_t* fb = fb_of(c, heap);
+
+    float s   = (float)scale_q16 / 65536.0f;
+    float ang = (float)rotate_deg * 3.14159265358979f / 180.0f;
+    float ca = cosf(ang), sa = sinf(ang);
+    float cxs = sx + w * 0.5f, cys = sy + h * 0.5f;   /* source centre */
+    float cxd = dx + w * 0.5f, cyd = dy + h * 0.5f;   /* dest centre (world) */
+    /* Half-extent of the scaled+rotated w×h box, to bound the dest scan. */
+    float hw = w * 0.5f * s, hh = h * 0.5f * s;
+    float extx = fabsf(ca)*hw + fabsf(sa)*hh;
+    float exty = fabsf(sa)*hw + fabsf(ca)*hh;
+    int x0 = (int)floorf(cxd - extx), x1 = (int)ceilf(cxd + extx);
+    int y0 = (int)floorf(cyd - exty), y1 = (int)ceilf(cyd + exty);
+    float inv = 1.0f / s;
+
+    for (int Y = y0; Y <= y1; ++Y) {
+        for (int X = x0; X <= x1; ++X) {
+            float rx = (X + 0.5f) - cxd;
+            float ry = (Y + 0.5f) - cyd;
+            /* inverse rotate (by -ang) then unscale */
+            float ux = ( ca*rx + sa*ry) * inv;
+            float uy = (-sa*rx + ca*ry) * inv;
+            int srcx = (int)floorf(cxs + ux);
+            int srcy = (int)floorf(cys + uy);
+            if (srcx < sx || srcx >= sx + w || srcy < sy || srcy >= sy + h) continue;
+            if (srcx < 0 || srcx >= b->w || srcy < 0 || srcy >= b->h) continue;
+            uint8_t px = src[srcy * b->w + srcx];
+            if (colkey >= 0 && px == (uint8_t)colkey) continue;
+            put_px(c, fb, X, Y, px);
+        }
+    }
+}
+
 void cron_gpu_bltm(cronopio_console_t* c, uint8_t* heap, int tm,
                    int dx, int dy, int sx, int sy, int w, int h, int colkey) {
     if ((unsigned)tm >= CRONOPIO_TILEMAP_SLOTS || !c->tilemaps[tm].used) return;
@@ -456,5 +497,45 @@ void cron_gpu_bltm(cronopio_console_t* c, uint8_t* heap, int tm,
             if (colkey >= 0 && s == (uint8_t)colkey) continue;
             put_px(c, fb, dx + i, dy + j, s);
         }
+    }
+}
+
+/* ---- textured-rasteriser accelerators (software-3D fast path) --------- */
+
+void cron_gpu_cmap(cronopio_console_t* c, uint32_t offset, int set) {
+    c->cmap_offset = offset;
+    c->cmap_set    = set;
+}
+
+void cron_gpu_tcol(cronopio_console_t* c, uint8_t* heap, int x, int y0, int y1,
+                   uint32_t src_off, int mask, int32_t frac, int32_t step) {
+    if (x < c->draw.clip_x0 || x >= c->draw.clip_x1) return;
+    if (y0 < c->draw.clip_y0) { frac += step * (c->draw.clip_y0 - y0); y0 = c->draw.clip_y0; }
+    if (y1 >= c->draw.clip_y1) y1 = c->draw.clip_y1 - 1;
+    const uint8_t* src = heap + src_off;
+    const uint8_t* cm  = c->cmap_set ? heap + c->cmap_offset : 0;
+    uint8_t* fb = heap + c->fb_offset;
+    uint32_t m = (uint32_t)mask;
+    for (int y = y0; y <= y1; ++y) {
+        uint8_t s = src[((uint32_t)frac >> 16) & m];
+        fb[y * CRONOPIO_SCREEN_W + x] = cm ? cm[s] : s;
+        frac += step;
+    }
+}
+
+void cron_gpu_tspan(cronopio_console_t* c, uint8_t* heap, int y, int x0, int x1,
+                    uint32_t src_off, int32_t u, int32_t v, int32_t du, int32_t dv) {
+    if (y < c->draw.clip_y0 || y >= c->draw.clip_y1) return;
+    if (x0 < c->draw.clip_x0) { u += du * (c->draw.clip_x0 - x0); v += dv * (c->draw.clip_x0 - x0); x0 = c->draw.clip_x0; }
+    if (x1 >= c->draw.clip_x1) x1 = c->draw.clip_x1 - 1;
+    const uint8_t* src = heap + src_off;   /* 64x64 */
+    const uint8_t* cm  = c->cmap_set ? heap + c->cmap_offset : 0;
+    uint8_t* fb = heap + c->fb_offset;
+    int row = y * CRONOPIO_SCREEN_W;
+    for (int x = x0; x <= x1; ++x) {
+        int idx = (int)((((uint32_t)v >> 16) & 63u) << 6) | (int)(((uint32_t)u >> 16) & 63u);
+        uint8_t s = src[idx];
+        fb[row + x] = cm ? cm[s] : s;
+        u += du; v += dv;
     }
 }

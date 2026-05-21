@@ -101,6 +101,11 @@ extern void     cvm_sys_cron_camera      (int32_t x, int32_t y);
 extern void     cvm_sys_cron_camera_reset(void);
 extern void     cvm_sys_cron_pal         (int32_t c0, int32_t c1);
 extern void     cvm_sys_cron_pal_reset   (void);
+/* blt_ex receives sx/sy and w/h packed (the cron_blt_ex wrapper packs them). */
+extern void     cvm_sys_cron_blt_ex      (int32_t img, int32_t dx, int32_t dy, int32_t srcpack, int32_t dimpack, int32_t colkey, int32_t rotate, int32_t scale_q16);
+extern void     cvm_sys_cron_cmap        (const uint8_t* ptr);
+extern void     cvm_sys_cron_tcol        (int32_t x, int32_t y0, int32_t y1, const uint8_t* src, int32_t mask, int32_t frac, int32_t step);
+extern void     cvm_sys_cron_tspan       (int32_t y, int32_t x0, int32_t x1, const uint8_t* src, int32_t u, int32_t v, int32_t du, int32_t dv);
 
 /* ---------------- User-facing aliases (the `cron_*` names) -------------- */
 
@@ -161,6 +166,29 @@ static inline void     cron_camera      (int32_t x, int32_t y) { cvm_sys_cron_ca
 static inline void     cron_camera_reset(void) { cvm_sys_cron_camera_reset(); }
 static inline void     cron_pal         (int32_t c0, int32_t c1) { cvm_sys_cron_pal(c0, c1); }
 static inline void     cron_pal_reset   (void) { cvm_sys_cron_pal_reset(); }
+
+/* Rotozoom blit: scale is Q16.16 (0x10000 = 1.0), rotate in degrees
+ * clockwise, both around the sprite centre (placed at dx+w/2, dy+h/2). */
+#define CRON_SCALE_1X  (0x10000)
+static inline void     cron_blt_ex      (int32_t img, int32_t dx, int32_t dy,
+                                         int32_t sx, int32_t sy, int32_t w, int32_t h,
+                                         int32_t colkey, int32_t rotate, int32_t scale_q16) {
+    cvm_sys_cron_blt_ex(img, dx, dy,
+                        (int32_t)(((uint32_t)sx << 16) | ((uint32_t)sy & 0xFFFFu)),
+                        (int32_t)(((uint32_t)w  << 16) | ((uint32_t)h  & 0xFFFFu)),
+                        colkey, rotate, scale_q16);
+}
+
+/* Software-3D rasteriser accelerators (DOOM-style). cron_cmap sets the
+ * active 256-byte light/colormap (NULL = identity); tcol/tspan write
+ * cmap[texel] honouring the clip rect (camera and pal do not apply). */
+static inline void     cron_cmap        (const uint8_t* ptr) { cvm_sys_cron_cmap(ptr); }
+/* Vertical textured column: rows [y0,y1] at screen x; src is (mask+1) bytes
+ * (mask = texture_height-1, power of two); frac/step are Q16.16. */
+static inline void     cron_tcol        (int32_t x, int32_t y0, int32_t y1, const uint8_t* src, int32_t mask, int32_t frac, int32_t step) { cvm_sys_cron_tcol(x, y0, y1, src, mask, frac, step); }
+/* Horizontal textured span over a 64x64 source: cols [x0,x1] at screen y;
+ * (u,v) Q16.16 advance by (du,dv). */
+static inline void     cron_tspan       (int32_t y, int32_t x0, int32_t x1, const uint8_t* src, int32_t u, int32_t v, int32_t du, int32_t dv) { cvm_sys_cron_tspan(y, x0, x1, src, u, v, du, dv); }
 
 /* Video pointers — populated by cron_resolve_video(). Until that is called
  * they are NULL; reading/writing through them then would crash, so always
