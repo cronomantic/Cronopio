@@ -1,0 +1,25 @@
+@PACKAGE_INIT@
+
+# Cronopio SDK config package. After find_package(Cronopio), a consumer can
+# call cronopio_add_cartridge(). The cartridge compiler (cronopio-cc) and the
+# SDK headers live in this same install prefix.
+
+set_and_check(CRONOPIO_INCLUDE_DIR "@PACKAGE_CMAKE_INSTALL_INCLUDEDIR@")
+
+# Point the cart rule at the installed cronopio-cc. It resolves the SDK
+# headers (../include) and cvm-cc (its sibling) relative to itself, so no
+# PATH plumbing is needed.
+find_program(CRONOPIO_CC cronopio-cc
+    HINTS "@PACKAGE_CMAKE_INSTALL_BINDIR@"
+    NO_DEFAULT_PATH)
+if(NOT CRONOPIO_CC)
+    find_program(CRONOPIO_CC cronopio-cc)   # fall back to PATH
+endif()
+
+include("${CMAKE_CURRENT_LIST_DIR}/CronopioCart.cmake")
+
+if(NOT CRONOPIO_CC)
+    message(WARNING
+        "Cronopio: cronopio-cc not found in the install prefix or on PATH; "
+        "cartridge targets will not build.")
+endif()

@@ -283,4 +283,53 @@ static inline uint32_t cron_rom_size(void) {
     return (uint32_t)cvm_sys_rom_size();
 }
 
+/* ---------------- Cartridge entry point ------------------------------------
+ *
+ * The host expects a cart to: define storage for CRON_FB / CRON_PAL, resolve
+ * the video regions, and register a per-frame callback from main(). That is
+ * the same five lines in every cart, so these macros write them for you.
+ *
+ * Use ONE of them in exactly one source file:
+ *
+ *   #include <cronopio.h>
+ *   void frame(void) { ... }      // called at 60 Hz
+ *   CRONOPIO_CART(frame)          // <- generates main() + FB/PAL storage
+ *
+ * or, when you have one-time setup to run before the first frame:
+ *
+ *   void setup(void) { ... }      // called once at boot
+ *   void frame(void) { ... }
+ *   CRONOPIO_CART_INIT(setup, frame)
+ *
+ * If a cart needs full control of main() (e.g. it draws without a frame
+ * callback, or wants a custom error path) it can still define CRON_FB /
+ * CRON_PAL and main() by hand instead of using these — see examples/hello. */
+
+/* Storage the macros and a hand-written main() share. Defining these in the
+ * header (guarded so it lands in exactly one TU) is what removes the
+ * boilerplate; a hand-rolled main() that wants them defines CRONOPIO_NO_MAIN
+ * is *not* needed — it simply declares them itself as before. */
+#define CRONOPIO_CART_STORAGE \
+    volatile uint8_t  *CRON_FB  = 0; \
+    volatile uint32_t *CRON_PAL = 0;
+
+#define CRONOPIO_CART_INIT(setup_fn, frame_fn)                          \
+    CRONOPIO_CART_STORAGE                                               \
+    int main(void) {                                                   \
+        if (cron_resolve_video() != 0) {                               \
+            static const char _e[] =                                   \
+                "cart: fb/pal regions missing — build via cronopio-cc " \
+                "or CronopioCart.cmake\n";                             \
+            cron_log(_e, (int32_t)sizeof(_e) - 1);                     \
+            return 1;                                                  \
+        }                                                              \
+        (setup_fn)();                                                  \
+        cron_set_frame(frame_fn);                                      \
+        return 0;                                                      \
+    }
+
+/* Frame-only variant: no setup pass. */
+static inline void cron__noop_setup(void) { }
+#define CRONOPIO_CART(frame_fn) CRONOPIO_CART_INIT(cron__noop_setup, frame_fn)
+
 #endif

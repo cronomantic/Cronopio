@@ -50,21 +50,38 @@ The same applies when building CronoVM standalone under
 
 ## Building a cartridge end-to-end
 
-Once `cvm-cc` is built (it lives at
-`external/CronoVM/build/tools/cvm-cc/cvm-cc.exe` after the build above),
-compile a cart:
+The Cronopio build produces `cronopio-cc` (the cartridge compiler) at
+`build/tools/cronopio-cc/cronopio-cc.exe`. It bakes in the memory map and SDK
+include path, so compiling a cart is one line:
 
 ```sh
-external/CronoVM/build/tools/cvm-cc/cvm-cc.exe \
-  -I sdk/include \
-  --heap-reserve=1M --stack-reserve=64K \
-  --region=fb:76800:rw --region=pal:128:rw \
-  examples/hello/hello.c -o hello.bin
+build/tools/cronopio-cc/cronopio-cc.exe examples/hello/hello.c -o hello.bin
 ```
 
-Add `external/CronoVM/build/tools/cvm-cc` to PATH so
-`cronopio_add_cartridge()` (which does `find_program(CVM_CC cvm-cc)`)
-picks it up automatically.
+In-tree, `cronopio_add_cartridge()` finds `cronopio-cc` automatically (it
+prefers the build target), so `cmake --build build` builds every example with
+no PATH setup.
+
+## Installing the SDK (for standalone cart projects)
+
+To author carts outside this repo, install the SDK to a prefix:
+
+```sh
+cmake --install build --prefix ~/cronopio
+```
+
+That lays down `bin/{cronopio,cronopio-cc,cvm-cc,cvm-translate}`,
+`include/cronopio*.h`, the runtime headers under `share/`, and a CMake package
+under `lib/cmake/Cronopio`. A standalone cart project then needs only:
+
+```cmake
+find_package(Cronopio REQUIRED)
+cronopio_add_cartridge(mygame SOURCES main.c)
+```
+
+configured with `-DCMAKE_PREFIX_PATH=~/cronopio`. Put `~/cronopio/bin` on PATH
+to call `cronopio-cc` / `cronopio` directly. `cronopio-cc new <name>`
+scaffolds such a project.
 
 ## Running (desktop)
 

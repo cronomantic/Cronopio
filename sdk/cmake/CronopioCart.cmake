@@ -1,32 +1,32 @@
 # CronopioCart.cmake
 #
 # Declare a cartridge target. A cartridge is a CronoVM .bin built from C
-# sources via cvm-cc, with the framebuffer/palette host regions baked in
-# as the Cronopio runtime expects.
+# sources, with the Cronopio memory map (fb/pal regions) and default reserves
+# baked in. The build drives `cronopio-cc`, which owns those defaults — so
+# this file just resolves the compiler and forwards overrides.
 #
-#   include(${CRONOPIO_DIR}/sdk/cmake/CronopioCart.cmake)
-#   cronopio_add_cartridge(my_game SOURCES src/main.c src/world.c)
+#   find_package(Cronopio REQUIRED)          # installed SDK
+#   cronopio_add_cartridge(my_game SOURCES main.c)
 #
-# Produces ${CMAKE_CURRENT_BINARY_DIR}/my_game.bin. The build invokes
-# cvm-cc with --region=fb:76800:rw and --region=pal:128:rw so the
-# host's cronopio_resolve_video_regions() finds them at load time.
+# or in-tree (CronoVM + Cronopio built together), include this file directly.
+# Produces ${CMAKE_CURRENT_BINARY_DIR}/<name>.bin.
 
-if(NOT DEFINED CRONOPIO_SDK_DIR)
-    set(CRONOPIO_SDK_DIR "${CMAKE_CURRENT_LIST_DIR}/..")
+# Resolve the cartridge compiler. Order:
+#   1. CRONOPIO_CC already set (CronopioConfig points it at the installed exe)
+#   2. the in-tree cronopio-cc target (fresh checkout builds with what it just
+#      compiled)
+#   3. cronopio-cc on PATH
+if(NOT CRONOPIO_CC)
+    if(TARGET cronopio-cc)
+        set(CRONOPIO_CC "$<TARGET_FILE:cronopio-cc>")
+    else()
+        find_program(CRONOPIO_CC cronopio-cc DOC "Path to the cronopio-cc cartridge compiler")
+    endif()
 endif()
 
-# Prefer the in-tree cvm-cc target (when CronoVM is built as a subdirectory)
-# over any installed copy on PATH, so a fresh checkout builds cartridges with
-# the toolchain it just compiled.
-if(TARGET cvm-cc)
-    set(CVM_CC "$<TARGET_FILE:cvm-cc>")
-else()
-    find_program(CVM_CC cvm-cc DOC "Path to the cvm-cc compiler wrapper")
-endif()
-
-# Default reserves — most carts can override via cronopio_add_cartridge(
-#   ... HEAP_RESERVE 4M STACK_RESERVE 32K). The 32 MiB default is the v0.2
-# "pre-3D era" baseline (room for a DOOM zone heap alongside a WAD in ROM).
+# Reserves the cart gets unless it overrides them. Kept in sync with the
+# defaults cronopio-cc bakes in; passing them explicitly makes the build
+# self-documenting and lets a project change them project-wide.
 set(CRONOPIO_DEFAULT_HEAP_RESERVE  "32M"  CACHE STRING "Default cart heap reserve")
 set(CRONOPIO_DEFAULT_STACK_RESERVE "256K" CACHE STRING "Default cart stack reserve")
 
@@ -35,12 +35,12 @@ function(cronopio_add_cartridge name)
     if(NOT ARG_SOURCES)
         message(FATAL_ERROR "cronopio_add_cartridge(${name}): SOURCES required")
     endif()
-    if(NOT CVM_CC)
+    if(NOT CRONOPIO_CC)
         message(WARNING
-            "cvm-cc not found in PATH — cartridge '${name}' will not build "
-            "until the CronoVM toolchain is installed. Build CronoVM with "
-            "LLVM available and either install it or add its build/tools/cvm-cc "
-            "directory to PATH.")
+            "cronopio-cc not found — cartridge '${name}' will not build. "
+            "Install the Cronopio SDK (and put its bin/ on PATH or pass "
+            "-DCMAKE_PREFIX_PATH=<prefix>), or build Cronopio with "
+            "-DCRONOPIO_BUILD_TOOLS=ON so the in-tree cronopio-cc target exists.")
         return()
     endif()
 
@@ -51,29 +51,32 @@ function(cronopio_add_cartridge name)
         set(ARG_STACK_RESERVE "${CRONOPIO_DEFAULT_STACK_RESERVE}")
     endif()
 
-    # Optional read-only cartridge ROM (e.g. a WAD), baked into the .bin.
     set(rom_flag "")
-    set(rom_dep "")
+    set(rom_dep  "")
     if(ARG_ROM)
         set(rom_flag "--rom=${ARG_ROM}")
-        set(rom_dep "${ARG_ROM}")
+        set(rom_dep  "${ARG_ROM}")
+    endif()
+
+    # Build-tree convenience: when the compiler is the in-tree target, depend
+    # on it so it's built first. (No-op when CRONOPIO_CC is an installed path.)
+    set(cc_dep "")
+    if(TARGET cronopio-cc)
+        set(cc_dep cronopio-cc)
     endif()
 
     set(out "${CMAKE_CURRENT_BINARY_DIR}/${name}.bin")
     add_custom_command(
         OUTPUT  "${out}"
-        COMMAND "${CVM_CC}"
-                -I "${CRONOPIO_SDK_DIR}/include"
+        COMMAND "${CRONOPIO_CC}"
                 "--heap-reserve=${ARG_HEAP_RESERVE}"
                 "--stack-reserve=${ARG_STACK_RESERVE}"
-                "--region=fb:76800:rw"
-                "--region=pal:1024:rw"
                 ${rom_flag}
                 ${ARG_SOURCES}
                 -o "${out}"
-        DEPENDS ${ARG_SOURCES} ${rom_dep} $<$<TARGET_EXISTS:cvm-cc>:cvm-cc>
+        DEPENDS ${ARG_SOURCES} ${rom_dep} ${cc_dep}
         WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-        COMMENT "cvm-cc → ${name}.bin"
+        COMMENT "cronopio-cc → ${name}.bin"
         VERBATIM)
     add_custom_target(${name} ALL DEPENDS "${out}")
 endfunction()

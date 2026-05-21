@@ -21,7 +21,7 @@ cmake --build build
 ```
 
 Each cartridge builds to `build/examples/<name>/<name>.bin`. The build uses
-the `cvm-cc` it just compiled in-tree (no install needed).
+the `cronopio-cc` it just compiled in-tree (no install needed).
 
 ## Running
 

@@ -1,35 +1,49 @@
 # Writing a Cronopio cartridge
 
-A cartridge is a CronoVM `.bin` compiled from C with `cvm-cc`. You include
-`<cronopio.h>` (and, for 3D, `<cronopio3d.h>`), write a frame callback, and
-the host drives it at 60 Hz. This page is the front door; the full syscall
-list is in [`syscalls.md`](syscalls.md).
+A cartridge is a CronoVM `.bin` compiled from C. You include `<cronopio.h>`
+(and, for 3D, `<cronopio3d.h>`), write a frame callback, and the host drives
+it at 60 Hz. This page is the front door; the full syscall list is in
+[`syscalls.md`](syscalls.md).
+
+## Quickstart
+
+```sh
+cronopio-cc new mygame      # scaffold mygame/{main.c,CMakeLists.txt,README.md}
+cd mygame
+cronopio-cc main.c -o mygame.bin
+cronopio mygame.bin         # run it
+```
+
+`cronopio-cc` is the cartridge compiler: it bakes in the Cronopio memory map
+and SDK include path so you don't pass `--region`/`-I` flags by hand. (Under
+the hood it drives `cvm-cc`, the generic CronoVM compiler.)
 
 ## Anatomy
 
 ```c
 #include <cronopio.h>
 
-/* The framebuffer/palette pointers the SDK fills in. Define them once. */
-volatile uint8_t  *CRON_FB  = 0;
-volatile uint32_t *CRON_PAL = 0;
+static void setup(void) {          /* runs once at boot */
+    /* ... load resources: cron_image / cron_sample / cron_mod_play ... */
+}
 
 static void frame(void) {          /* called every 1/60 s */
     cron_cls(0);                   /* clear to palette index 0 */
     /* ... read input, update state, draw ... */
 }
 
-int main(void) {                   /* runs once at boot */
-    cron_resolve_video();          /* resolve CRON_FB / CRON_PAL */
-    /* ... load resources: cron_image / cron_sample / cron_mod_play ... */
-    cron_set_frame(frame);         /* register the per-frame callback */
-    return 0;
-}
+CRONOPIO_CART_INIT(setup, frame)   /* generates main() + CRON_FB/CRON_PAL */
 ```
 
-The boot `main` runs once: resolve video, register resources, set the frame
-function, return. The host then calls `frame` every tick (via CronoVM's
-`cvm_call`), polling input and presenting the framebuffer around it.
+`CRONOPIO_CART_INIT(setup, frame)` writes the boilerplate every cart needs:
+storage for the `CRON_FB`/`CRON_PAL` pointers, a `main()` that resolves the
+video regions, runs `setup` once, and registers `frame`. Use `CRONOPIO_CART(frame)`
+if you have no setup pass. The host then calls `frame` every tick (via
+CronoVM's `cvm_call`), polling input and presenting the framebuffer around it.
+
+If you need full control of `main` (no frame callback, custom error handling),
+define `CRON_FB`/`CRON_PAL` and `main()` by hand instead — see
+[`examples/hello`](../examples/hello/hello.c).
 
 ## Drawing
 
@@ -80,7 +94,7 @@ Transform/project/light in `cronopio3d.h`, submit triangles with
 Big read-only data (sprite sheets, a WAD, a `.mod`) goes in the cart ROM:
 
 ```sh
-cvm-cc ... --rom=assets.bin game.c -o game.bin
+cronopio-cc --rom=assets.bin game.c -o game.bin
 ```
 
 Read it with `cron_rom()` / `cron_rom_size()`. Small assets can just be
@@ -88,14 +102,25 @@ Read it with `cron_rom()` / `cron_rom_size()`. Small assets can just be
 
 ## Building & running
 
+The one-line path:
+
 ```sh
-cvm-cc -I sdk/include \
-       --region=fb:76800:rw --region=pal:1024:rw \
-       game.c -o game.bin
-./build/host/desktop/cronopio game.bin
+cronopio-cc game.c -o game.bin
+cronopio game.bin
 ```
 
-Or use the CMake helper: `cronopio_add_cartridge(game SOURCES game.c)` (it
-adds the region flags and reserves; see `sdk/cmake/CronopioCart.cmake`).
-Toolchain setup and the Windows/msys2 gotcha are in [`BUILDING.md`](BUILDING.md).
+For a project with its own build, scaffold one and build it with CMake — it
+finds the installed SDK via `find_package(Cronopio)`:
+
+```sh
+cronopio-cc new game
+cd game
+cmake -B build -DCMAKE_PREFIX_PATH=<cronopio-install-prefix>
+cmake --build build        # -> build/game.bin
+```
+
+`cronopio_add_cartridge(game SOURCES game.c)` is the CMake helper (it picks up
+the reserves and routes through `cronopio-cc`; see
+`sdk/cmake/CronopioCart.cmake`). Installing the SDK (`cmake --install`) is
+covered in [`BUILDING.md`](BUILDING.md), along with the Windows/msys2 gotcha.
 The same `.bin` runs on the desktop and web hosts.

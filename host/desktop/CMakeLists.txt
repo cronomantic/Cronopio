@@ -16,3 +16,8 @@ add_executable(cronopio main.c)
 # SDL2 library after it resolves. Listing SDL2main last leaves those
 # references undefined.
 target_link_libraries(cronopio PRIVATE cronopio_common SDL2::SDL2main SDL2::SDL2)
+
+if(CRONOPIO_INSTALL)
+    include(GNUInstallDirs)
+    install(TARGETS cronopio RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+endif()
