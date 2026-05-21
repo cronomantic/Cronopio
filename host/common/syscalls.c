@@ -355,6 +355,29 @@ static int sys_tspan(struct cvm_image *img, int32_t *r, void *ud) {
     r[0] = 0; return 0;
 }
 
+/* ------ 3D triangle submission ------------------------------------------ */
+
+static int sys_zbuf(struct cvm_image *img, int32_t *r, void *ud) {
+    uint32_t ptr = (uint32_t)r[0];
+    uint64_t bytes = (uint64_t)CRONOPIO_SCREEN_W * CRONOPIO_SCREEN_H * 4u;
+    if (ptr == 0 || (uint64_t)ptr + bytes > img->mem_size) { cron_gpu_zbuf(X->c, 0, 0); r[0] = 0; return 0; }
+    cron_gpu_zbuf(X->c, ptr, 1);
+    r[0] = 0; return 0;
+}
+static int sys_zclear(struct cvm_image *img, int32_t *r, void *ud) {
+    (void)img; cron_gpu_zclear(X->c, HEAP, r[0]); r[0] = 0; return 0;
+}
+static int sys_polys(struct cvm_image *img, int32_t *r, void *ud) {
+    GUARD;
+    uint32_t voff  = (uint32_t)r[1];
+    int      count = (int)r[2];
+    if (count < 3) { r[0] = 0; return 0; }
+    uint64_t need = (uint64_t)count * CRONOPIO_VERT_BYTES;
+    if ((uint64_t)voff + need > img->mem_size) { r[0] = 0; return 0; }
+    cron_gpu_polys(X->c, HEAP, (int)r[0], voff, count, (int)r[3], (int)r[4]);
+    r[0] = 0; return 0;
+}
+
 #undef X
 #undef GUARD
 #undef HEAP
@@ -520,6 +543,10 @@ static const entry_t kSyscalls[] = {
     { "cvm_sys_cron_cmap",         sys_cmap         },
     { "cvm_sys_cron_tcol",         sys_tcol         },
     { "cvm_sys_cron_tspan",        sys_tspan        },
+    /* 3D triangle submission */
+    { "cvm_sys_cron_zbuf",         sys_zbuf         },
+    { "cvm_sys_cron_zclear",       sys_zclear       },
+    { "cvm_sys_cron_polys",        sys_polys        },
 };
 
 int cronopio_syscalls_install(struct cvm_image* img, cronopio_console_t* c) {

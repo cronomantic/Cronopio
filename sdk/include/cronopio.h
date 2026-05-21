@@ -107,6 +107,11 @@ extern void     cvm_sys_cron_cmap        (const uint8_t* ptr);
 extern void     cvm_sys_cron_tcol        (int32_t x, int32_t y0, int32_t y1, const uint8_t* src, int32_t mask, int32_t frac, int32_t step);
 extern void     cvm_sys_cron_tspan       (int32_t y, int32_t x0, int32_t x1, const uint8_t* src, int32_t u, int32_t v, int32_t du, int32_t dv);
 
+/* 3D triangle submission (0x120). */
+extern void     cvm_sys_cron_zbuf        (int32_t* zbuffer);
+extern void     cvm_sys_cron_zclear      (int32_t far);
+extern void     cvm_sys_cron_polys       (int32_t mode, const void* verts, int32_t count, int32_t arg, int32_t colkey);
+
 /* ---------------- User-facing aliases (the `cron_*` names) -------------- */
 
 static inline void     cron_log         (const char* m, int32_t n)        { cvm_sys_cron_log(m, n); }
@@ -189,6 +194,33 @@ static inline void     cron_tcol        (int32_t x, int32_t y0, int32_t y1, cons
 /* Horizontal textured span over a 64x64 source: cols [x0,x1] at screen y;
  * (u,v) Q16.16 advance by (du,dv). */
 static inline void     cron_tspan       (int32_t y, int32_t x0, int32_t x1, const uint8_t* src, int32_t u, int32_t v, int32_t du, int32_t dv) { cvm_sys_cron_tspan(y, x0, x1, src, u, v, du, dv); }
+
+/* 3D triangle submission. Fill a cron_vert_t array, then cron_polys() draws
+ * count/3 triangles. Transform/project/light in fixed point (Q16.16) on the
+ * cart; the host rasterises. See docs/syscalls.md. */
+typedef struct {
+    int32_t x, y;   /* screen pixels */
+    int32_t z;      /* depth (CRON_POLY_ZTEST: nearer = smaller) */
+    int32_t u, v;   /* texcoords, Q16.16 texels (CRON_POLY_TEX) */
+    int32_t w;      /* perspective depth (CRON_POLY_PERSP) */
+    int32_t c;      /* gouraud light/index (CRON_POLY_GOURAUD) */
+} cron_vert_t;
+
+enum {
+    CRON_POLY_FLAT    = 0,
+    CRON_POLY_GOURAUD = 1 << 0,   /* interpolate vertex .c through the cmap */
+    CRON_POLY_TEX     = 1 << 1,   /* affine texture from image bank `arg`    */
+    CRON_POLY_PERSP   = 1 << 2,   /* perspective-correct texture (uses .w)   */
+    CRON_POLY_ZTEST   = 1 << 3,   /* depth test/write the bound z-buffer     */
+};
+
+/* Bind a 320*240 int32 depth buffer (NULL disables). */
+static inline void     cron_zbuf         (int32_t* zb) { cvm_sys_cron_zbuf(zb); }
+/* Clear the bound z-buffer to `far` (e.g. 0x7FFFFFFF). */
+static inline void     cron_zclear       (int32_t far) { cvm_sys_cron_zclear(far); }
+/* Draw count/3 triangles. arg = flat colour, or image bank when TEX; colkey
+ * = transparent texel or -1. */
+static inline void     cron_polys        (int32_t mode, const cron_vert_t* verts, int32_t count, int32_t arg, int32_t colkey) { cvm_sys_cron_polys(mode, verts, count, arg, colkey); }
 
 /* Video pointers — populated by cron_resolve_video(). Until that is called
  * they are NULL; reading/writing through them then would crash, so always

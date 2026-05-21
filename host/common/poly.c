@@ -1,0 +1,149 @@
+/* 3D triangle rasteriser — the PSX / 486-Pentium-style submission layer.
+ *
+ * The cart does transform + projection + lighting in fixed point and hands
+ * the host batches of screen-space triangles (a vertex array in cart memory);
+ * this file fills them. Barycentric edge-function rasteriser with per-pixel
+ * attribute interpolation: flat / Gouraud (light index through the active
+ * cmap) / affine or perspective-correct texture from an image bank, with an
+ * optional depth buffer.
+ *
+ * Interpolation uses host floats — the host is native code, so this is the
+ * fast path; the cart's own 3D maths stays fixed-point. Writes honour the
+ * clip rect (viewport) but, like tcol/tspan, bypass camera and the draw
+ * palette (the cmap is the only colour remap). */
+
+#include "console.h"
+
+#include <stdint.h>
+
+typedef struct { int32_t x, y, z, u, v, w, c; } vert_t;
+
+static void rd_vert(const uint8_t* p, vert_t* o) {
+    const int32_t* w = (const int32_t*)p;
+    o->x = w[0]; o->y = w[1]; o->z = w[2];
+    o->u = w[3]; o->v = w[4]; o->w = w[5]; o->c = w[6];
+}
+
+/* Twice the signed area of triangle (a,b,c); >0 for one winding, <0 the
+ * other. Also the edge function value of c against edge a->b. */
+static int64_t edge(int ax, int ay, int bx, int by, int cx, int cy) {
+    return (int64_t)(bx - ax) * (cy - ay) - (int64_t)(by - ay) * (cx - ax);
+}
+
+void cron_gpu_zbuf(cronopio_console_t* c, uint32_t offset, int set) {
+    c->zbuf_offset = offset;
+    c->zbuf_set    = set;
+}
+
+void cron_gpu_zclear(cronopio_console_t* c, uint8_t* heap, int32_t far) {
+    if (!c->zbuf_set) return;
+    int32_t* zb = (int32_t*)(heap + c->zbuf_offset);
+    int n = CRONOPIO_SCREEN_W * CRONOPIO_SCREEN_H;
+    for (int i = 0; i < n; ++i) zb[i] = far;
+}
+
+void cron_gpu_polys(cronopio_console_t* c, uint8_t* heap, int mode,
+                    uint32_t verts_off, int count, int arg, int colkey) {
+    if (count < 3) return;
+    const uint8_t* vbase = heap + verts_off;
+    uint8_t* fb = heap + c->fb_offset;
+    const uint8_t* cm = c->cmap_set ? heap + c->cmap_offset : 0;
+
+    int use_z = (mode & CRONOPIO_POLY_ZTEST) && c->zbuf_set;
+    int32_t* zb = use_z ? (int32_t*)(heap + c->zbuf_offset) : 0;
+
+    const uint8_t* tex = 0;
+    int tw = 0, th = 0;
+    if (mode & CRONOPIO_POLY_TEX) {
+        if ((unsigned)arg >= CRONOPIO_IMAGE_SLOTS || !c->images[arg].used) return;
+        tex = heap + c->images[arg].offset;
+        tw  = c->images[arg].w;
+        th  = c->images[arg].h;
+    }
+    int persp   = (mode & CRONOPIO_POLY_PERSP) && (mode & CRONOPIO_POLY_TEX);
+    int gouraud = (mode & CRONOPIO_POLY_GOURAUD);
+
+    const int CX0 = c->draw.clip_x0, CY0 = c->draw.clip_y0;
+    const int CX1 = c->draw.clip_x1, CY1 = c->draw.clip_y1;
+
+    for (int t = 0; t + 3 <= count; t += 3) {
+        vert_t a, b, d;
+        rd_vert(vbase + (size_t)(t + 0) * CRONOPIO_VERT_BYTES, &a);
+        rd_vert(vbase + (size_t)(t + 1) * CRONOPIO_VERT_BYTES, &b);
+        rd_vert(vbase + (size_t)(t + 2) * CRONOPIO_VERT_BYTES, &d);
+
+        int64_t area = edge(a.x, a.y, b.x, b.y, d.x, d.y);
+        if (area == 0) continue;                     /* degenerate */
+        float invarea = 1.0f / (float)area;
+
+        int minx = a.x < b.x ? (a.x < d.x ? a.x : d.x) : (b.x < d.x ? b.x : d.x);
+        int maxx = a.x > b.x ? (a.x > d.x ? a.x : d.x) : (b.x > d.x ? b.x : d.x);
+        int miny = a.y < b.y ? (a.y < d.y ? a.y : d.y) : (b.y < d.y ? b.y : d.y);
+        int maxy = a.y > b.y ? (a.y > d.y ? a.y : d.y) : (b.y > d.y ? b.y : d.y);
+        if (minx < CX0) minx = CX0; if (maxx > CX1 - 1) maxx = CX1 - 1;
+        if (miny < CY0) miny = CY0; if (maxy > CY1 - 1) maxy = CY1 - 1;
+        if (minx > maxx || miny > maxy) continue;
+
+        /* Perspective: pre-divide texcoords by w per vertex, interpolate
+         * u/w, v/w, 1/w linearly, divide per pixel. */
+        float iw0=0, iw1=0, iw2=0, uo0=0, uo1=0, uo2=0, vo0=0, vo1=0, vo2=0;
+        if (persp) {
+            iw0 = a.w ? 1.0f / (float)a.w : 0.0f;
+            iw1 = b.w ? 1.0f / (float)b.w : 0.0f;
+            iw2 = d.w ? 1.0f / (float)d.w : 0.0f;
+            uo0 = a.u * iw0; uo1 = b.u * iw1; uo2 = d.u * iw2;
+            vo0 = a.v * iw0; vo1 = b.v * iw1; vo2 = d.v * iw2;
+        }
+
+        for (int py = miny; py <= maxy; ++py) {
+            int row = py * CRONOPIO_SCREEN_W;
+            for (int px = minx; px <= maxx; ++px) {
+                int64_t wa = edge(b.x, b.y, d.x, d.y, px, py);
+                int64_t wb = edge(d.x, d.y, a.x, a.y, px, py);
+                int64_t wc = edge(a.x, a.y, b.x, b.y, px, py);
+                if (area > 0) { if (wa < 0 || wb < 0 || wc < 0) continue; }
+                else          { if (wa > 0 || wb > 0 || wc > 0) continue; }
+
+                float bA = (float)wa * invarea;
+                float bB = (float)wb * invarea;
+                float bC = (float)wc * invarea;
+                int idx = row + px;
+
+                int32_t z = 0;
+                if (use_z) {
+                    z = (int32_t)(bA * a.z + bB * b.z + bC * d.z);
+                    if (z >= zb[idx]) continue;
+                }
+
+                int col;
+                if (tex) {
+                    float uf, vf;
+                    if (persp) {
+                        float iwp = bA*iw0 + bB*iw1 + bC*iw2;
+                        if (iwp == 0.0f) continue;
+                        uf = (bA*uo0 + bB*uo1 + bC*uo2) / iwp;
+                        vf = (bA*vo0 + bB*vo1 + bC*vo2) / iwp;
+                    } else {
+                        uf = bA*a.u + bB*b.u + bC*d.u;
+                        vf = bA*a.v + bB*b.v + bC*d.v;
+                    }
+                    int tu = ((int)uf) >> 16;
+                    int tv = ((int)vf) >> 16;
+                    tu %= tw; if (tu < 0) tu += tw;
+                    tv %= th; if (tv < 0) tv += th;
+                    uint8_t s = tex[tv * tw + tu];
+                    if (colkey >= 0 && s == (uint8_t)colkey) continue;
+                    col = cm ? cm[s] : s;
+                } else if (gouraud) {
+                    int ci = (int)(bA*a.c + bB*b.c + bC*d.c) & 0xFF;
+                    col = cm ? cm[ci] : ci;
+                } else {
+                    col = arg & 0xFF;
+                }
+
+                fb[idx] = (uint8_t)col;
+                if (use_z) zb[idx] = z;
+            }
+        }
+    }
+}

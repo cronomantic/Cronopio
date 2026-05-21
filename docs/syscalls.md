@@ -158,6 +158,36 @@ inner loop in native host C. They honour the clip rect (so a 3D viewport
 clips correctly) but ignore camera and the draw palette — the active
 `cmap` is the only remap, mirroring DOOM's light diminishing.
 
+## 3D triangle submission (0x120) — PSX / 486-Pentium style
+
+The cart transforms, projects and lights its geometry in fixed point
+(Q16.16, via CronoVM `MUL`/`MULH`), fills a `cron_vert_t` array in its own
+memory, and submits batches of screen-space triangles. The host rasterises
+them in native C. This is the PSX model (the GTE transformed, the GPU
+filled) and amortises the syscall cost across a whole batch.
+
+```c
+typedef struct {
+    int32_t x, y;   /* screen pixels */
+    int32_t z;      /* depth (ZTEST: nearer = smaller) */
+    int32_t u, v;   /* texcoords, Q16.16 texels (TEX) */
+    int32_t w;      /* perspective depth (PERSP) */
+    int32_t c;      /* gouraud light/index (GOURAUD) */
+} cron_vert_t;      /* CRON_POLY_* mode flags select which fields are used */
+```
+
+| Name                  | Signature (SDK)                                                  | Notes                                                                |
+|-----------------------|-----------------------------------------------------------------|----------------------------------------------------------------------|
+| `cron_polys`          | `void(mode, const cron_vert_t* verts, count, arg, colkey)`     | Draw `count/3` triangles. **mode** is a bitmask: `FLAT` (solid `arg`), `GOURAUD` (interpolate `.c` through the cmap), `TEX` (affine texture from image bank `arg`, `colkey` transparent), `PERSP` (perspective-correct, uses `.w`), `ZTEST` (depth test/write). |
+| `cron_zbuf`           | `void(int32_t* zbuffer)`                                        | Bind a 320×240 i32 depth buffer in cart memory; NULL disables (painter's-only). |
+| `cron_zclear`         | `void(int32_t far)`                                             | Fill the bound z-buffer with `far` (e.g. `0x7FFFFFFF`).              |
+
+Like the rasteriser accelerators, triangles honour the clip rect (viewport)
+but ignore camera and the draw palette; the active `cmap` shades Gouraud and
+textured spans (DOOM-style per-triangle light). Texture coords wrap (repeat)
+modulo the image-bank dimensions. Back-face culling is the cart's job (a 2D
+screen-space cross product); the rasteriser fills either winding.
+
 ## Cartridge ROM
 
 These are **CronoVM built-ins** (auto-bound by the loader, no host handler),

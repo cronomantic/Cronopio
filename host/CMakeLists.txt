@@ -2,6 +2,7 @@ add_library(cronopio_common STATIC
     common/console.c
     common/syscalls.c
     common/gpu.c
+    common/poly.c
     common/apu.c
     common/input.c
 )

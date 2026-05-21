@@ -15,6 +15,17 @@
 #define CRONOPIO_TILEMAP_SLOTS   8
 #define CRONOPIO_TILE_SIZE       8
 
+/* 3D triangle submission. A vertex is 7 little-endian i32 words in cart
+ * memory: x, y (screen px), z (depth), u, v (texcoords Q16.16), w (1/clip-w
+ * style depth for perspective), c (gouraud light/index). cron_polys draws
+ * count/3 triangles. mode is a bitmask. */
+#define CRONOPIO_VERT_WORDS      7
+#define CRONOPIO_VERT_BYTES      (CRONOPIO_VERT_WORDS * 4)
+#define CRONOPIO_POLY_GOURAUD    (1u << 0)   /* interpolate vertex c via cmap */
+#define CRONOPIO_POLY_TEX        (1u << 1)   /* affine texture from image bank */
+#define CRONOPIO_POLY_PERSP      (1u << 2)   /* perspective-correct (needs w)  */
+#define CRONOPIO_POLY_ZTEST      (1u << 3)   /* depth test/write the z-buffer  */
+
 #define CRONOPIO_FB_BYTES      (CRONOPIO_SCREEN_W * CRONOPIO_SCREEN_H)  /* 76 800 */
 #define CRONOPIO_PAL_BYTES     (CRONOPIO_PALETTE_SIZE * 4)              /* 128    */
 
@@ -76,6 +87,11 @@ typedef struct {
      * cmap_set is 0 the accelerators write source indices unremapped. */
     uint32_t cmap_offset;
     int      cmap_set;
+
+    /* Optional depth buffer: 320x240 int32 in cart memory, written/tested by
+     * CRONOPIO_POLY_ZTEST triangles. Nearer = smaller z. */
+    uint32_t zbuf_offset;
+    int      zbuf_set;
 
     /* audio */
     cron_voice_t voices[CRONOPIO_AUDIO_CHANS];
@@ -210,5 +226,22 @@ void cron_gpu_tcol(cronopio_console_t* c, uint8_t* heap, int x, int y0, int y1,
  * (u,v) Q16.16 advance by (du,dv); index = ((v>>16)&63)*64 + ((u>>16)&63). */
 void cron_gpu_tspan(cronopio_console_t* c, uint8_t* heap, int y, int x0, int x1,
                     uint32_t src_off, int32_t u, int32_t v, int32_t du, int32_t dv);
+
+/* --- 3D triangle submission (PSX / 486-Pentium-style software rasteriser).
+ * The cart transforms+projects in fixed point, then submits batches of
+ * screen-space triangles. Honours the clip rect (viewport) and the active
+ * cmap (gouraud/light); ignores camera and the draw palette. --- */
+
+/* Bind/clear the depth buffer (320x240 int32 in cart memory; set=0 = none). */
+void cron_gpu_zbuf  (cronopio_console_t* c, uint32_t offset, int set);
+/* Fill the bound depth buffer with `far` (typically INT32_MAX). */
+void cron_gpu_zclear(cronopio_console_t* c, uint8_t* heap, int32_t far);
+
+/* Draw count/3 triangles from a vertex array at verts_off (CRONOPIO_VERT_BYTES
+ * each). mode is a CRONOPIO_POLY_* bitmask. arg = flat colour index, or the
+ * image-bank slot when CRONOPIO_POLY_TEX is set. colkey: transparent texel
+ * index for textured draws, or -1. */
+void cron_gpu_polys (cronopio_console_t* c, uint8_t* heap, int mode,
+                     uint32_t verts_off, int count, int arg, int colkey);
 
 #endif
