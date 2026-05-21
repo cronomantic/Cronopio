@@ -4,9 +4,11 @@ add_executable(cronopio-cc cronopio-cc.c)
 # Build-tree defaults baked in, so cronopio-cc works straight from build/
 # without anything on PATH. The install layout (sibling cvm-cc, ../include)
 # is probed at runtime and takes precedence when present.
-set(_sdk_inc "${CMAKE_SOURCE_DIR}/sdk/include")
+set(_sdk_inc   "${CMAKE_SOURCE_DIR}/sdk/include")
+set(_templates "${CMAKE_SOURCE_DIR}/sdk/templates")
 target_compile_definitions(cronopio-cc PRIVATE
-    "CRONOPIO_SDK_INCLUDE=\"${_sdk_inc}\"")
+    "CRONOPIO_SDK_INCLUDE=\"${_sdk_inc}\""
+    "CRONOPIO_TEMPLATES_DIR=\"${_templates}\"")
 
 if(TARGET cvm-cc)
     # Generator expression can't go in a -D string portably; stamp it via a

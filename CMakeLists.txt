@@ -78,6 +78,11 @@ if(CRONOPIO_INSTALL)
         DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
         FILES_MATCHING PATTERN "*.h")
 
+    # Project templates for `cronopio-cc new`. Probed at runtime relative to
+    # the exe as <bin>/../share/cronopio/templates.
+    install(DIRECTORY sdk/templates/
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/cronopio/templates)
+
     # The cart rule, installed next to the package config so the generated
     # CronopioConfig.cmake can include() it by relative path.
     install(FILES sdk/cmake/CronopioCart.cmake

@@ -8,11 +8,15 @@ it at 60 Hz. This page is the front door; the full syscall list is in
 ## Quickstart
 
 ```sh
-cronopio-cc new mygame      # scaffold mygame/{main.c,CMakeLists.txt,README.md}
+cronopio-cc new mygame      # scaffold mygame/{main.c,CMakeLists.txt,README.md,.gitignore}
 cd mygame
 cronopio-cc main.c -o mygame.bin
 cronopio mygame.bin         # run it
 ```
+
+`new` picks a starting point — `--template=basic` (default), `sprites`, or
+`3d`; run `cronopio-cc new --list` to see them, or omit `--template` on a
+terminal to be prompted.
 
 `cronopio-cc` is the cartridge compiler: it bakes in the Cronopio memory map
 and SDK include path so you don't pass `--region`/`-I` flags by hand. (Under

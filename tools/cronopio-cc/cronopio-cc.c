@@ -51,6 +51,17 @@
 #ifndef CRONOPIO_SDK_INCLUDE
 #  define CRONOPIO_SDK_INCLUDE "."
 #endif
+#ifndef CRONOPIO_TEMPLATES_DIR
+#  define CRONOPIO_TEMPLATES_DIR "."
+#endif
+
+#if defined(_WIN32)
+#  define ISATTY(fd) _isatty(fd)
+#  define FILENO(f)  _fileno(f)
+#else
+#  define ISATTY(fd) isatty(fd)
+#  define FILENO(f)  fileno(f)
+#endif
 
 /* Cronopio machine defaults — must match sdk/cmake/CronopioCart.cmake. */
 #define CRON_REGION_FB   "--region=fb:76800:rw"
@@ -153,7 +164,8 @@ static void usage(FILE *f) {
     fprintf(f,
         "Usage:\n"
         "  cronopio-cc <input.c> -o <output.bin> [options]   compile a cartridge\n"
-        "  cronopio-cc new <name>                            scaffold a cart project\n"
+        "  cronopio-cc new <name> [--template=T]             scaffold a cart project\n"
+        "  cronopio-cc new --list                            list templates\n"
         "\n"
         "Compile bakes in the Cronopio memory map and SDK include path, then\n"
         "forwards everything else to cvm-cc:\n"
@@ -170,91 +182,159 @@ static void usage(FILE *f) {
         "  --sdk=DIR                SDK include dir (holds cronopio.h)\n");
 }
 
-/* ---- scaffold (`cronopio-cc new <name>`) ------------------------------- */
+/* ---- scaffold (`cronopio-cc new <name> [--template=T]`) ---------------- */
 
-static int write_file(const char *dir, const char *name, const char *body) {
-    char path[1024];
-    snprintf(path, sizeof path, "%s%c%s", dir, PATH_SEP, name);
-    if (file_exists(path)) {
-        fprintf(stderr, "cronopio-cc: refusing to overwrite %s\n", path);
-        return 1;
-    }
-    FILE *f = fopen(path, "wb");
-    if (!f) { fprintf(stderr, "cronopio-cc: cannot write %s: %s\n", path, strerror(errno)); return 1; }
-    fputs(body, f);
-    fclose(f);
-    printf("  %s\n", path);
+/* The curated template set. Each is a directory under the templates root
+ * holding (at least) main.c; CMakeLists.txt / README.md / .gitignore are
+ * taken from the template, or fall back to the _common directory. */
+static const struct { const char *name, *desc; } TEMPLATES[] = {
+    { "basic",   "moving box + text (start here)" },
+    { "sprites", "an 8x8 sprite moved with the d-pad (image banks, blt)" },
+    { "3d",      "a spinning textured cube (the 3D pipeline)" },
+};
+static const int N_TEMPLATES = (int)(sizeof TEMPLATES / sizeof TEMPLATES[0]);
+
+static int is_known_template(const char *t) {
+    for (int i = 0; i < N_TEMPLATES; ++i)
+        if (strcmp(t, TEMPLATES[i].name) == 0) return 1;
     return 0;
 }
 
-static int scaffold(const char *name) {
-    if (!name || !*name) { fprintf(stderr, "cronopio-cc: new: missing project name\n"); return 2; }
+static void list_templates(FILE *f) {
+    fprintf(f, "Available templates:\n");
+    for (int i = 0; i < N_TEMPLATES; ++i)
+        fprintf(f, "  %-9s %s\n", TEMPLATES[i].name, TEMPLATES[i].desc);
+}
+
+/* Resolve the templates root: --templates > install layout > CMake bake. */
+static char *find_templates_dir(const char *override, const char *argv0) {
+    if (override) return strdup(override);
+    const char *slash = exe_dir_end(argv0);
+    if (slash) {
+        size_t dirlen = (size_t)(slash - argv0);
+        char probe[1024];
+        int n = snprintf(probe, sizeof probe,
+                         "%.*s%c..%cshare%ccronopio%ctemplates%cbasic%cmain.c",
+                         (int)dirlen, argv0, PATH_SEP, PATH_SEP, PATH_SEP,
+                         PATH_SEP, PATH_SEP, PATH_SEP);
+        if (n > 0 && n < (int)sizeof probe && file_exists(probe)) {
+            char *dir = (char *)malloc((size_t)dirlen + 64);
+            if (dir) {
+                snprintf(dir, dirlen + 64, "%.*s%c..%cshare%ccronopio%ctemplates",
+                         (int)dirlen, argv0, PATH_SEP, PATH_SEP, PATH_SEP, PATH_SEP);
+                return dir;
+            }
+        }
+    }
+    return strdup(CRONOPIO_TEMPLATES_DIR);
+}
+
+/* Copy src -> dst, replacing every "@NAME@" with `name`. */
+static int copy_substituted(const char *src, const char *dst, const char *name) {
+    FILE *in = fopen(src, "rb");
+    if (!in) return -1;                 /* not found is not fatal: caller decides */
+    FILE *out = fopen(dst, "wb");
+    if (!out) { fclose(in); fprintf(stderr, "cronopio-cc: cannot write %s\n", dst); return 1; }
+    int c;
+    const char *tok = "@NAME@";
+    int matched = 0;                    /* chars of tok matched so far */
+    while ((c = fgetc(in)) != EOF) {
+        if (c == tok[matched]) {
+            if (tok[++matched] == '\0') { fputs(name, out); matched = 0; }
+        } else {
+            if (matched) { fwrite(tok, 1, (size_t)matched, out); matched = 0; }
+            /* the failed char might itself start a match */
+            if (c == tok[0]) matched = 1; else fputc(c, out);
+        }
+    }
+    if (matched) fwrite(tok, 1, (size_t)matched, out);
+    fclose(in); fclose(out);
+    return 0;
+}
+
+/* Copy one project file from <templates>/<tpl>/<file>, falling back to
+ * <templates>/_common/<file>. Missing in both is silently skipped. */
+static int emit_file(const char *templates, const char *tpl,
+                     const char *dstdir, const char *file, const char *name) {
+    char src[1024], dst[1024];
+    snprintf(dst, sizeof dst, "%s%c%s", dstdir, PATH_SEP, file);
+    if (file_exists(dst)) { fprintf(stderr, "cronopio-cc: refusing to overwrite %s\n", dst); return 1; }
+
+    snprintf(src, sizeof src, "%s%c%s%c%s", templates, PATH_SEP, tpl, PATH_SEP, file);
+    int rc = copy_substituted(src, dst, name);
+    if (rc == -1) {                     /* not in the template — try _common */
+        snprintf(src, sizeof src, "%s%c_common%c%s", templates, PATH_SEP, PATH_SEP, file);
+        rc = copy_substituted(src, dst, name);
+        if (rc == -1) return 0;         /* in neither: nothing to emit */
+    }
+    if (rc == 0) printf("  %s\n", dst);
+    return rc;
+}
+
+static int scaffold(int argc, char **argv) {
+    const char *name = NULL, *tpl = NULL, *templates_override = NULL;
+    int do_list = 0;
+    for (int i = 2; i < argc; ++i) {
+        const char *a = argv[i];
+        if (strcmp(a, "--list") == 0)             do_list = 1;
+        else if (strncmp(a, "--template=", 11) == 0) tpl = a + 11;
+        else if (strcmp(a, "-t") == 0 && i + 1 < argc) tpl = argv[++i];
+        else if (strncmp(a, "--templates=", 12) == 0) templates_override = a + 12;
+        else if (a[0] == '-') { fprintf(stderr, "cronopio-cc: new: unknown option '%s'\n", a); return 2; }
+        else if (!name) name = a;
+        else { fprintf(stderr, "cronopio-cc: new: unexpected argument '%s'\n", a); return 2; }
+    }
+
+    if (do_list) { list_templates(stdout); return 0; }
+    if (!name || !*name) {
+        fprintf(stderr, "cronopio-cc: new: missing project name\n"
+                        "usage: cronopio-cc new <name> [--template=basic|sprites|3d]\n");
+        return 2;
+    }
+
+    /* Pick a template: explicit flag, else interactive prompt on a TTY, else
+     * 'basic'. */
+    char chosen[32];
+    if (tpl) {
+        if (!is_known_template(tpl)) {
+            fprintf(stderr, "cronopio-cc: unknown template '%s'\n", tpl);
+            list_templates(stderr);
+            return 2;
+        }
+        snprintf(chosen, sizeof chosen, "%s", tpl);
+    } else if (ISATTY(FILENO(stdin)) && ISATTY(FILENO(stdout))) {
+        list_templates(stdout);
+        printf("Template [basic]: ");
+        fflush(stdout);
+        char line[64];
+        if (fgets(line, sizeof line, stdin)) {
+            size_t n = strlen(line);
+            while (n && (line[n-1] == '\n' || line[n-1] == '\r' || line[n-1] == ' ')) line[--n] = 0;
+            if (n == 0) snprintf(chosen, sizeof chosen, "basic");
+            else if (is_known_template(line)) snprintf(chosen, sizeof chosen, "%s", line);
+            else { fprintf(stderr, "cronopio-cc: unknown template '%s'\n", line); return 2; }
+        } else {
+            snprintf(chosen, sizeof chosen, "basic");
+        }
+    } else {
+        snprintf(chosen, sizeof chosen, "basic");
+    }
+
+    char *templates = find_templates_dir(templates_override, argv[0]);
+
     if (MKDIR(name) != 0 && errno != EEXIST) {
         fprintf(stderr, "cronopio-cc: cannot create %s: %s\n", name, strerror(errno));
+        free(templates);
         return 1;
     }
 
-    char main_c[2048];
-    snprintf(main_c, sizeof main_c,
-        "/* %s — a Cronopio cartridge. Build: cmake -B build && cmake --build build\n"
-        " * or directly: cronopio-cc main.c -o %s.bin */\n"
-        "#include <cronopio.h>\n"
-        "\n"
-        "static int32_t t;\n"
-        "\n"
-        "void setup(void) {\n"
-        "    cron_log(\"%s booting\\n\", %d);\n"
-        "}\n"
-        "\n"
-        "void frame(void) {\n"
-        "    cron_cls(1);                       /* clear to colour 1 */\n"
-        "    int32_t x = (t * 2) %% (CRON_SCREEN_W - 32);\n"
-        "    cron_rect(x, 100, 32, 32, 7);      /* a moving box */\n"
-        "    static const char hi[] = \"%s\";\n"
-        "    cron_text(hi, (int32_t)sizeof(hi) - 1, 8, 8, 15);\n"
-        "    if (cron_pad(0) & CRON_BTN_A) cron_cls(8);\n"
-        "    t++;\n"
-        "}\n"
-        "\n"
-        "CRONOPIO_CART_INIT(setup, frame)\n",
-        name, name, name, (int)strlen(name) + 9, name);
-
-    char cml[1024];
-    snprintf(cml, sizeof cml,
-        "cmake_minimum_required(VERSION 3.16)\n"
-        "project(%s C)\n"
-        "\n"
-        "# Needs an installed Cronopio SDK on CMAKE_PREFIX_PATH, or pass\n"
-        "#   -DCMAKE_PREFIX_PATH=<cronopio-install-prefix>\n"
-        "find_package(Cronopio REQUIRED)\n"
-        "\n"
-        "cronopio_add_cartridge(%s SOURCES main.c)\n",
-        name, name);
-
-    char readme[1024];
-    snprintf(readme, sizeof readme,
-        "# %s\n\n"
-        "A Cronopio cartridge.\n\n"
-        "## Build\n\n"
-        "```sh\n"
-        "cmake -B build -DCMAKE_PREFIX_PATH=<cronopio-install-prefix>\n"
-        "cmake --build build\n"
-        "```\n\n"
-        "Produces `build/%s.bin`. Or compile directly without CMake:\n\n"
-        "```sh\n"
-        "cronopio-cc main.c -o %s.bin\n"
-        "```\n\n"
-        "## Run\n\n"
-        "```sh\n"
-        "cronopio %s.bin\n"
-        "```\n",
-        name, name, name, name);
-
-    printf("Scaffolding cart '%s':\n", name);
+    printf("Scaffolding cart '%s' from template '%s':\n", name, chosen);
+    static const char *files[] = { "main.c", "CMakeLists.txt", "README.md", ".gitignore" };
     int rc = 0;
-    rc |= write_file(name, "main.c", main_c);
-    rc |= write_file(name, "CMakeLists.txt", cml);
-    rc |= write_file(name, "README.md", readme);
+    for (int i = 0; i < (int)(sizeof files / sizeof files[0]); ++i)
+        rc |= emit_file(templates, chosen, name, files[i], name);
+    free(templates);
+
     if (rc == 0)
         printf("Done. Next: cd %s && cronopio-cc main.c -o %s.bin\n", name, name);
     return rc;
@@ -264,7 +344,7 @@ static int scaffold(const char *name) {
 
 int main(int argc, char **argv) {
     if (argc >= 2 && strcmp(argv[1], "new") == 0)
-        return scaffold(argc >= 3 ? argv[2] : NULL);
+        return scaffold(argc, argv);
     if (argc < 2 || strcmp(argv[1], "-h") == 0 || strcmp(argv[1], "--help") == 0) {
         usage(argc < 2 ? stderr : stdout);
         return argc < 2 ? 2 : 0;
