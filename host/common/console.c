@@ -2,9 +2,11 @@
 
 #include <string.h>
 
-static const uint32_t default_palette[CRONOPIO_PALETTE_SIZE] = {
-    /* A pleasant 32-colour starter palette. Cartridges can overwrite
-     * any entry at runtime by writing to the palette region. */
+/* A pleasant 32-colour starter set occupies indices 0..31; seed_palette
+ * fills 32..255 with a grayscale ramp so all 256 entries are valid for a
+ * do-nothing cart. Cartridges (DOOM, etc.) overwrite the whole palette at
+ * runtime by writing to the palette region. */
+static const uint32_t default_palette32[32] = {
     0x000000, 0x1d2b53, 0x7e2553, 0x008751, 0xab5236, 0x5f574f, 0xc2c3c7, 0xfff1e8,
     0xff004d, 0xffa300, 0xffec27, 0x00e436, 0x29adff, 0x83769c, 0xff77a8, 0xffccaa,
     0x291814, 0x111d35, 0x422136, 0x125359, 0x742f29, 0x49333b, 0xa28879, 0xf3ef7d,
@@ -29,7 +31,14 @@ void cronopio_console_end_frame(cronopio_console_t* c) {
 void cronopio_console_seed_palette(uint8_t* heap, uint32_t pal_offset) {
     uint8_t* pal = heap + pal_offset;
     for (int i = 0; i < CRONOPIO_PALETTE_SIZE; ++i) {
-        uint32_t v = default_palette[i];
+        uint32_t v;
+        if (i < 32) {
+            v = default_palette32[i];
+        } else {
+            /* Grayscale ramp across the remaining 224 entries. */
+            uint32_t g = (uint32_t)(((i - 32) * 255) / (CRONOPIO_PALETTE_SIZE - 32 - 1));
+            v = (g << 16) | (g << 8) | g;
+        }
         pal[i*4 + 0] = (uint8_t)(v       & 0xFF);
         pal[i*4 + 1] = (uint8_t)((v>> 8) & 0xFF);
         pal[i*4 + 2] = (uint8_t)((v>>16) & 0xFF);
@@ -55,7 +64,7 @@ void cronopio_console_blit_rgba(const cronopio_console_t* c,
     }
     const int n = CRONOPIO_FB_BYTES;
     for (int i = 0; i < n; ++i) {
-        dst[i] = cache[fb[i] & 0x1F];
+        dst[i] = cache[fb[i]];   /* full 8-bit index */
     }
 }
 

@@ -76,7 +76,7 @@ for the HAL contract.
 ```sh
 cvm-cc -I sdk/include \
        --heap-reserve=1M --stack-reserve=64K \
-       --region=fb:76800:rw --region=pal:128:rw \
+       --region=fb:76800:rw --region=pal:1024:rw \
        examples/hello/hello.c -o hello.bin
 ```
 

@@ -57,7 +57,9 @@ a streaming texture, calls into the common runtime per frame.
 stub file. The user-friendly `cron_*` names are `static inline`
 aliases in the same header. The framebuffer and palette become
 ordinary C pointers after a one-call `cron_resolve_video()` at
-startup.
+startup. Bundled assets (a DOOM WAD, etc.) are baked in with
+`cvm-cc --rom=FILE` and read through `cron_rom()` / `cron_rom_size()`,
+which front the CronoVM `cvm_sys_rom_*` built-ins.
 
 ## Why this layout
 

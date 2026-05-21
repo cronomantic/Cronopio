@@ -91,6 +91,17 @@ future ABI lets carts flush mid-frame.
 | `cvm_sys_cron_save_read`   | `i32(u8* dst, i32 len)`         | Read up to 1024 bytes; returns bytes read |
 | `cvm_sys_cron_save_write`  | `i32(const u8* src, i32 len)`   | Write up to 1024 bytes; returns written   |
 
+## Cartridge ROM
+
+These are **CronoVM built-ins** (auto-bound by the loader, no host handler),
+exposed through the SDK helpers `cron_rom()` / `cron_rom_size()`. They read
+the read-only data blob baked into the `.bin` with `cvm-cc --rom=FILE`.
+
+| Name                  | Signature   | Notes                                            |
+|-----------------------|-------------|--------------------------------------------------|
+| `cvm_sys_rom_base`    | `i32()`     | Heap offset of the cart ROM (treat as a pointer) |
+| `cvm_sys_rom_size`    | `i32()`     | ROM length in bytes; 0 if the cart carries none  |
+
 ## Gamepad bitmask
 
 ```text

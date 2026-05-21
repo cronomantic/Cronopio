@@ -5,7 +5,7 @@
 
 #define CRONOPIO_SCREEN_W      320
 #define CRONOPIO_SCREEN_H      240
-#define CRONOPIO_PALETTE_SIZE   32
+#define CRONOPIO_PALETTE_SIZE  256
 #define CRONOPIO_FPS            60
 #define CRONOPIO_AUDIO_HZ    22050
 #define CRONOPIO_AUDIO_CHANS     4

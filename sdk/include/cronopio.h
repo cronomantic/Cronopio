@@ -19,7 +19,7 @@
 
 #define CRON_SCREEN_W  320
 #define CRON_SCREEN_H  240
-#define CRON_PAL_SIZE   32
+#define CRON_PAL_SIZE  256
 #define CRON_SAVE_BYTES 1024
 
 /* Gamepad bits. */
@@ -40,6 +40,12 @@ enum { CRON_WAVE_SINE = 0, CRON_WAVE_SQUARE = 1, CRON_WAVE_TRI = 2, CRON_WAVE_NO
  * heap-relative offset or -1 if the binary didn't declare it. The cart's
  * --region= flags (passed to cvm-cc) line up with these names. */
 extern int32_t cvm_sys_get_region(const char* name);
+
+/* CronoVM built-ins: the read-only cartridge ROM baked in with --rom=FILE.
+ * cvm_sys_rom_base() is the heap offset of the blob (treat as a pointer);
+ * cvm_sys_rom_size() its length in bytes (0 if the cart carries no ROM). */
+extern int32_t cvm_sys_rom_base(void);
+extern int32_t cvm_sys_rom_size(void);
 
 /* ---------------- Host syscalls (cvm_sys_ prefix → IMPORTS section) ----- */
 
@@ -127,6 +133,18 @@ static inline int cron_resolve_video(void) {
     CRON_FB  = (volatile uint8_t  *)(uintptr_t)fb;
     CRON_PAL = (volatile uint32_t *)(uintptr_t)pal;
     return 0;
+}
+
+/* Read-only cartridge ROM (assets baked in with cvm-cc --rom=FILE). Returns
+ * a pointer into the cart's address space, NULL if no ROM was bundled. Pair
+ * with cron_rom_size() for the length. A DOOM port points its WAD reader
+ * here. */
+static inline const uint8_t* cron_rom(void) {
+    if (cvm_sys_rom_size() == 0) return 0;
+    return (const uint8_t*)(uintptr_t)cvm_sys_rom_base();
+}
+static inline uint32_t cron_rom_size(void) {
+    return (uint32_t)cvm_sys_rom_size();
 }
 
 #endif

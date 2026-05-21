@@ -10,14 +10,14 @@
 #include <stdint.h>
 
 void cron_gpu_cls(uint8_t* heap, uint32_t fb_offset, int color) {
-    uint8_t  c  = (uint8_t)(color & 0x1F);
+    uint8_t  c  = (uint8_t)(color & 0xFF);
     uint8_t* fb = heap + fb_offset;
     for (int i = 0; i < CRONOPIO_FB_BYTES; ++i) fb[i] = c;
 }
 
 void cron_gpu_pset(uint8_t* heap, uint32_t fb_offset, int x, int y, int color) {
     if ((unsigned)x >= CRONOPIO_SCREEN_W || (unsigned)y >= CRONOPIO_SCREEN_H) return;
-    (heap + fb_offset)[y * CRONOPIO_SCREEN_W + x] = (uint8_t)(color & 0x1F);
+    (heap + fb_offset)[y * CRONOPIO_SCREEN_W + x] = (uint8_t)(color & 0xFF);
 }
 
 void cron_gpu_rect(uint8_t* heap, uint32_t fb_offset, int x, int y, int w, int h, int color) {
@@ -26,7 +26,7 @@ void cron_gpu_rect(uint8_t* heap, uint32_t fb_offset, int x, int y, int w, int h
     int y0 = y < 0 ? 0 : y;
     int x1 = x + w; if (x1 > CRONOPIO_SCREEN_W) x1 = CRONOPIO_SCREEN_W;
     int y1 = y + h; if (y1 > CRONOPIO_SCREEN_H) y1 = CRONOPIO_SCREEN_H;
-    uint8_t  c  = (uint8_t)(color & 0x1F);
+    uint8_t  c  = (uint8_t)(color & 0xFF);
     uint8_t* fb = heap + fb_offset;
     for (int yy = y0; yy < y1; ++yy) {
         uint8_t* row = fb + yy * CRONOPIO_SCREEN_W;
@@ -60,7 +60,7 @@ void cron_gpu_blit(uint8_t* heap, uint32_t fb_offset,
     for (int yy = y0; yy < y1; ++yy) {
         const uint8_t* srow = src + yy * sw;
         uint8_t*       drow = fb + (dy + yy) * CRONOPIO_SCREEN_W + dx;
-        for (int xx = x0; xx < x1; ++xx) drow[xx] = (uint8_t)(srow[xx] & 0x1F);
+        for (int xx = x0; xx < x1; ++xx) drow[xx] = (uint8_t)(srow[xx] & 0xFF);
     }
 }
 
