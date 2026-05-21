@@ -31,7 +31,7 @@ set(CRONOPIO_DEFAULT_HEAP_RESERVE  "32M"  CACHE STRING "Default cart heap reserv
 set(CRONOPIO_DEFAULT_STACK_RESERVE "256K" CACHE STRING "Default cart stack reserve")
 
 function(cronopio_add_cartridge name)
-    cmake_parse_arguments(ARG "" "HEAP_RESERVE;STACK_RESERVE;ROM" "SOURCES" ${ARGN})
+    cmake_parse_arguments(ARG "LTO" "HEAP_RESERVE;STACK_RESERVE;ROM" "SOURCES" ${ARGN})
     if(NOT ARG_SOURCES)
         message(FATAL_ERROR "cronopio_add_cartridge(${name}): SOURCES required")
     endif()
@@ -58,6 +58,14 @@ function(cronopio_add_cartridge name)
         set(rom_dep  "${ARG_ROM}")
     endif()
 
+    # LTO: link all SOURCES then run opt 'default<O2>' for cross-file inlining.
+    # A win for multi-file ports (renderer/fixed-point helpers spread across
+    # files); vectorisation stays off (the VM has no vector types).
+    set(lto_flag "")
+    if(ARG_LTO)
+        set(lto_flag "--lto")
+    endif()
+
     # Build-tree convenience: when the compiler is the in-tree target, depend
     # on it so it's built first. (No-op when CRONOPIO_CC is an installed path.)
     set(cc_dep "")
@@ -72,6 +80,7 @@ function(cronopio_add_cartridge name)
                 "--heap-reserve=${ARG_HEAP_RESERVE}"
                 "--stack-reserve=${ARG_STACK_RESERVE}"
                 ${rom_flag}
+                ${lto_flag}
                 ${ARG_SOURCES}
                 -o "${out}"
         DEPENDS ${ARG_SOURCES} ${rom_dep} ${cc_dep}
