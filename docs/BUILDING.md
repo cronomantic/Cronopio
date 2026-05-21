@@ -85,12 +85,18 @@ the frame loop with `emscripten_set_main_loop` (a requestAnimationFrame
 callback) instead of the native blocking `while`. Emscripten ships an SDL2
 port, so no separate SDL install is needed.
 
-Requires the Emscripten SDK (`emcc`/`emcmake` on PATH). Configure with the
-Emscripten toolchain and the web target:
+Requires the Emscripten SDK. On this machine it ships with msys2 under
+`C:/msys64/ucrt64/lib/emscripten/`. **PATH order matters**: put
+`C:/msys64/ucrt64/bin` *before* any scoop/Git mingw `bin` directories, or
+emcc's bundled clang fails to start with a `0xC0000139`
+(STATUS_ENTRYPOINT_NOT_FOUND) — it's a GCC-built binary that otherwise
+loads incompatible `libstdc++-6.dll` / `zlib1.dll` / `libzstd.dll` from
+winlibs or Git's mingw.
 
 ```sh
-emcmake cmake -B build-web -S . -DCRONOPIO_TARGET_DESKTOP=OFF -DCRONOPIO_TARGET_WEB=ON
-cmake --build build-web
+export PATH="/c/msys64/ucrt64/bin:/c/msys64/ucrt64/lib/emscripten:$PATH"
+emcmake cmake -B build-web -S . -G Ninja -DCRONOPIO_TARGET_DESKTOP=OFF -DCRONOPIO_TARGET_WEB=ON
+cmake --build build-web --target cronopio_web
 ```
 
 This emits `build-web/host/web/cronopio.{html,js,wasm}`. The page fetches a
