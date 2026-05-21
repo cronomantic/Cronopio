@@ -91,6 +91,14 @@ include(${CRONOPIO_DIR}/sdk/cmake/CronopioCart.cmake)
 cronopio_add_cartridge(my_game SOURCES src/main.c src/world.c)
 ```
 
+## 3D
+
+For polygon 3D (PSX / 486-Pentium era), the host has triangle-submission
+syscalls (`cron_polys` with flat/Gouraud/affine/perspective texturing and an
+optional z-buffer) and the cart-side header `sdk/include/cronopio3d.h`
+(vectors, matrices, projection, near-plane clipping). See
+[`docs/3d.md`](docs/3d.md).
+
 ## Status
 
 v0 draft. The host ABI is **not yet stable**. See
