@@ -130,4 +130,13 @@ static inline float powf(float base, float exp) {
 }
 static inline float pow(float base, float exp) { return powf(base, exp); }
 
+/* round-half-away-from-zero, float-only (no f64). lround/lroundf return long;
+ * long is 32-bit on this target. Used by g_game.c mouse code. */
+static inline float roundf(float x) {
+    return x >= 0.0f ? floorf(x + 0.5f) : ceilf(x - 0.5f);
+}
+static inline float round(float x) { return roundf(x); }
+static inline long lroundf(float x) { return (long)roundf(x); }
+static inline long lround(float x) { return lroundf(x); }
+
 #endif /* CVM_LIBC_MATH_H */

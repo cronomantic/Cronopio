@@ -1164,6 +1164,37 @@ char *fgets(char *s, int size, FILE *stream) {
 
 int fgetc(FILE *stream) { (void)stream; return EOF; }
 
+int ungetc(int c, FILE *stream) { (void)stream; return c; }
+
+/* No host filesystem: file reads return EOF. fscanf cannot match anything. */
+int fscanf(FILE *stream, const char *fmt, ...) {
+    (void)stream; (void)fmt;
+    return -1; /* EOF */
+}
+
+/* ---- <locale.h>: fixed "C" locale ------------------------------------- */
+#include <locale.h>
+char *setlocale(int category, const char *locale) {
+    (void)category; (void)locale;
+    return (char *)"C";
+}
+struct lconv *localeconv(void) {
+    static char dp[] = ".";
+    static char empty[] = "";
+    static struct lconv lc;
+    lc.decimal_point = dp;
+    lc.thousands_sep = empty;
+    lc.grouping = empty;
+    lc.int_curr_symbol = empty;
+    lc.currency_symbol = empty;
+    lc.mon_decimal_point = empty;
+    lc.mon_thousands_sep = empty;
+    lc.mon_grouping = empty;
+    lc.positive_sign = empty;
+    lc.negative_sign = empty;
+    return &lc;
+}
+
 int feof(FILE *stream) { (void)stream; return 1; }
 
 int ferror(FILE *stream) { (void)stream; return 0; }

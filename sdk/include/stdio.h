@@ -36,6 +36,7 @@ int   fprintf(FILE *stream, const char *fmt, ...);
 int   sprintf(char *str, const char *fmt, ...);
 int   snprintf(char *str, size_t size, const char *fmt, ...);
 int   sscanf(const char *str, const char *fmt, ...);
+int   fscanf(FILE *stream, const char *fmt, ...);
 
 /* va_list cores — always defined, always translate (va_list is char* here and
  * va_arg lowers to plain pointer loads). */
@@ -64,6 +65,7 @@ long  ftell(FILE *stream);
 int   fflush(FILE *stream);
 char *fgets(char *s, int size, FILE *stream);
 int   fgetc(FILE *stream);
+int   ungetc(int c, FILE *stream);
 int   feof(FILE *stream);
 int   ferror(FILE *stream);
 int   remove(const char *path);
