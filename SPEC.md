@@ -95,16 +95,18 @@ cvm-cc ... --rom=doom1.wad game.c -o doomopio.bin
 
 ## 4. Audio
 
-| Property        | Value                                          |
-|-----------------|------------------------------------------------|
-| Channels        | 4 tone + (planned) PCM mixing                  |
-| Sample rate     | 22 050 Hz                                      |
-| Output          | 16-bit signed stereo, mixed by host            |
-| Per-channel ops | tone (sine/square/triangle/noise), volume, pan |
+| Property        | Value                                                       |
+|-----------------|-------------------------------------------------------------|
+| Voices          | 16, shared pool (music + SFX)                               |
+| Sample rate     | 22 050 Hz                                                   |
+| Output          | 16-bit signed stereo, mixed by host                         |
+| Per-voice       | synth wave (sine/square/triangle/pulse/noise) **or** 8-bit PCM sample, with ADSR envelope, pitch, volume, pan |
 
-v0.2 ships the 4-channel tone synth. **PCM sample playback** (needed for
-DOOM SFX) is the next audio milestone — see §8 reserved range `0x200`.
-Music (MUS/MIDI) is a cart-side concern once PCM lands.
+The host provides the voices (a software mixer) plus a data-driven
+sequencer; the cart supplies samples / sounds / music and triggers
+playback. PCM samples are 8-bit signed mono in cart memory or ROM
+(zero-copy), resampled by pitch. This serves DOOM's PCM SFX directly. Full
+model in [`docs/audio.md`](docs/audio.md).
 
 ## 5. Input
 

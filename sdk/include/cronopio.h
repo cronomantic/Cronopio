@@ -72,6 +72,10 @@ extern void     cvm_sys_cron_present     (void);
 extern void     cvm_sys_cron_snd_tone    (int32_t ch, int32_t wave, int32_t freq_mhz, int32_t vol, int32_t pan);
 extern void     cvm_sys_cron_snd_stop    (int32_t ch);
 extern void     cvm_sys_cron_snd_master  (int32_t vol_q8);
+extern void     cvm_sys_cron_sample      (int32_t slot, const int8_t* ptr, int32_t len, int32_t rate);
+extern void     cvm_sys_cron_pcm         (int32_t voice, int32_t sample, int32_t pitch_q16, int32_t vol, int32_t pan, int32_t loop);
+extern void     cvm_sys_cron_env         (int32_t voice, int32_t attack_ms, int32_t decay_ms, int32_t sustain, int32_t release_ms);
+extern void     cvm_sys_cron_note_off    (int32_t voice);
 
 extern uint32_t cvm_sys_cron_pad         (int32_t player);
 extern uint32_t cvm_sys_cron_pad_pressed (int32_t player);
@@ -137,6 +141,14 @@ static inline void     cron_present     (void)                            { cvm_
 static inline void     cron_snd_tone    (int32_t ch, int32_t w, int32_t f, int32_t v, int32_t p) { cvm_sys_cron_snd_tone(ch, w, f, v, p); }
 static inline void     cron_snd_stop    (int32_t ch)                      { cvm_sys_cron_snd_stop(ch); }
 static inline void     cron_snd_master  (int32_t v)                       { cvm_sys_cron_snd_master(v); }
+/* Register an 8-bit signed mono PCM sample (in RAM or ROM) as bank `slot`. */
+static inline void     cron_sample      (int32_t slot, const int8_t* ptr, int32_t len, int32_t rate) { cvm_sys_cron_sample(slot, ptr, len, rate); }
+/* Play sample bank `s` on voice `v`. pitch 0x10000 = native rate. */
+static inline void     cron_pcm         (int32_t v, int32_t s, int32_t pitch_q16, int32_t vol, int32_t pan, int32_t loop) { cvm_sys_cron_pcm(v, s, pitch_q16, vol, pan, loop); }
+#define CRON_PITCH_1X  0x10000
+/* ADSR envelope (ms; sustain 0..255) applied to the next trigger on voice v. */
+static inline void     cron_env         (int32_t v, int32_t a_ms, int32_t d_ms, int32_t sustain, int32_t r_ms) { cvm_sys_cron_env(v, a_ms, d_ms, sustain, r_ms); }
+static inline void     cron_note_off    (int32_t v)                       { cvm_sys_cron_note_off(v); }
 
 static inline uint32_t cron_pad         (int32_t p)                       { return cvm_sys_cron_pad(p); }
 static inline uint32_t cron_pad_pressed (int32_t p)                       { return cvm_sys_cron_pad_pressed(p); }

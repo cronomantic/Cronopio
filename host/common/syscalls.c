@@ -400,6 +400,34 @@ static int sys_snd_stop(struct cvm_image *img, int32_t *r, void *ud) {
     return 0;
 }
 
+static int sys_sample(struct cvm_image *img, int32_t *r, void *ud) {
+    ctx_t *x = (ctx_t*)ud;
+    cron_apu_sample(x->c, (int)r[0], (uint32_t)r[1], (uint32_t)r[2], (uint32_t)r[3], img->mem_size);
+    r[0] = 0;
+    return 0;
+}
+static int sys_pcm(struct cvm_image *img, int32_t *r, void *ud) {
+    (void)img;
+    ctx_t *x = (ctx_t*)ud;
+    cron_apu_pcm(x->c, (int)r[0], (int)r[1], (uint32_t)r[2], (int)r[3], (int)r[4], (int)r[5]);
+    r[0] = 0;
+    return 0;
+}
+static int sys_env(struct cvm_image *img, int32_t *r, void *ud) {
+    (void)img;
+    ctx_t *x = (ctx_t*)ud;
+    cron_apu_env(x->c, (int)r[0], (int)r[1], (int)r[2], (int)r[3], (int)r[4]);
+    r[0] = 0;
+    return 0;
+}
+static int sys_note_off(struct cvm_image *img, int32_t *r, void *ud) {
+    (void)img;
+    ctx_t *x = (ctx_t*)ud;
+    cron_apu_note_off(x->c, (int)r[0]);
+    r[0] = 0;
+    return 0;
+}
+
 static int sys_snd_master(struct cvm_image *img, int32_t *r, void *ud) {
     (void)img;
     ctx_t *x = (ctx_t*)ud;
@@ -508,6 +536,10 @@ static const entry_t kSyscalls[] = {
     { "cvm_sys_cron_snd_tone",     sys_snd_tone     },
     { "cvm_sys_cron_snd_stop",     sys_snd_stop     },
     { "cvm_sys_cron_snd_master",   sys_snd_master   },
+    { "cvm_sys_cron_sample",       sys_sample       },
+    { "cvm_sys_cron_pcm",          sys_pcm          },
+    { "cvm_sys_cron_env",          sys_env          },
+    { "cvm_sys_cron_note_off",     sys_note_off     },
     /* input */
     { "cvm_sys_cron_pad",          sys_pad          },
     { "cvm_sys_cron_pad_pressed",  sys_pad_pressed  },
@@ -552,6 +584,9 @@ static const entry_t kSyscalls[] = {
 int cronopio_syscalls_install(struct cvm_image* img, cronopio_console_t* c) {
     g_ctx.img = img;
     g_ctx.c   = c;
+    /* Capture the heap base so the audio thread can read PCM sample bytes
+     * (the audio callback only receives the console pointer). */
+    c->heap = img->heap;
     int unresolved = 0;
     const size_t n = sizeof(kSyscalls) / sizeof(kSyscalls[0]);
     for (size_t i = 0; i < n; ++i) {

@@ -8,8 +8,19 @@
 #define CRONOPIO_PALETTE_SIZE  256
 #define CRONOPIO_FPS            60
 #define CRONOPIO_AUDIO_HZ    22050
-#define CRONOPIO_AUDIO_CHANS     4
+#define CRONOPIO_AUDIO_CHANS    16   /* voices, shared between music and SFX */
+#define CRONOPIO_SAMPLE_SLOTS   16   /* registered PCM sample banks */
 #define CRONOPIO_PAD_COUNT       2
+
+/* Synth waveforms (cron_snd_tone wave arg). */
+#define CRON_WAVE_SINE_  0
+#define CRON_WAVE_SQR_   1
+#define CRON_WAVE_TRI_   2
+#define CRON_WAVE_NOISE_ 3
+#define CRON_WAVE_PULSE_ 4
+
+/* Envelope stages. */
+enum { CRON_ENV_OFF = 0, CRON_ENV_ATTACK, CRON_ENV_DECAY, CRON_ENV_SUSTAIN, CRON_ENV_RELEASE };
 #define CRONOPIO_SAVE_BYTES   1024
 #define CRONOPIO_IMAGE_SLOTS     8
 #define CRONOPIO_TILEMAP_SLOTS   8
@@ -35,13 +46,44 @@
 #define CRONOPIO_FB_REGION   "fb"
 #define CRONOPIO_PAL_REGION  "pal"
 
+/* A voice: either a synth waveform or a PCM sample, shaped by an ADSR
+ * envelope. mode 0 = synth, 1 = PCM. Inactive when env stage is OFF and the
+ * voice isn't gated. */
 typedef struct {
-    int      wave;        /* 0 sine, 1 square, 2 triangle, 3 noise */
+    int      active;
+    int      mode;        /* 0 synth, 1 pcm */
+    int      vol;         /* 0..255 */
+    int      pan;         /* -128..127 */
+
+    /* synth */
+    int      wave;
     uint32_t freq_mhz;
-    int      vol;         /* 0..255           */
-    int      pan;         /* -128..127        */
     uint32_t phase;
+
+    /* pcm: position/step are Q16.16 sample-index fixed point */
+    int      sample;      /* sample-bank slot */
+    uint32_t pcm_pos;
+    uint32_t pcm_step;
+    int      loop;
+
+    /* ADSR envelope (level is Q8.8: 0..255<<8). Times in samples. */
+    int      env_stage;
+    int      env_level;   /* current 0..(255<<8) */
+    int      env_attack;  /* samples for 0 -> peak */
+    int      env_decay;   /* samples for peak -> sustain */
+    int      env_sustain; /* 0..255 sustain level */
+    int      env_release; /* samples for level -> 0 */
+    int      has_env;     /* 0 = gate (no envelope): full level until stop */
 } cron_voice_t;
+
+/* PCM sample bank: 8-bit signed mono in cart memory at heap `offset`,
+ * `len` samples, native `rate` Hz. */
+typedef struct {
+    uint32_t offset;
+    uint32_t len;
+    uint32_t rate;
+    int      used;
+} cron_sample_bank_t;
 
 /* Global drawing state — clip rect, camera offset, draw-time palette remap.
  * Every primitive routes pixel writes through these (Pyxel-style). */
@@ -94,8 +136,12 @@ typedef struct {
     int      zbuf_set;
 
     /* audio */
-    cron_voice_t voices[CRONOPIO_AUDIO_CHANS];
-    int          master_vol_q8;                  /* 0..256 */
+    cron_voice_t       voices[CRONOPIO_AUDIO_CHANS];
+    cron_sample_bank_t samples[CRONOPIO_SAMPLE_SLOTS];
+    int                master_vol_q8;            /* 0..256 */
+    /* Cart heap base, captured at load so the audio thread can read PCM
+     * sample bytes (the audio callback only gets the console pointer). */
+    const uint8_t     *heap;
 
     /* input snapshot */
     uint32_t pad_cur[CRONOPIO_PAD_COUNT];
@@ -146,10 +192,17 @@ void cronopio_console_blit_rgba(const cronopio_console_t* c,
 void cronopio_console_mix(cronopio_console_t* c, int16_t* dst, int frames);
 
 /* APU / input glue used by the syscall layer and the platform shell. */
-void     cron_apu_tone  (cronopio_console_t* c, int ch, int wave,
-                         uint32_t freq_mhz, int vol, int pan);
-void     cron_apu_stop  (cronopio_console_t* c, int ch);
-void     cron_apu_master(cronopio_console_t* c, int vol_q8);
+void     cron_apu_tone   (cronopio_console_t* c, int ch, int wave,
+                          uint32_t freq_mhz, int vol, int pan);
+void     cron_apu_stop   (cronopio_console_t* c, int ch);
+void     cron_apu_master (cronopio_console_t* c, int vol_q8);
+void     cron_apu_sample (cronopio_console_t* c, int slot, uint32_t offset,
+                          uint32_t len, uint32_t rate, uint32_t mem_size);
+void     cron_apu_pcm    (cronopio_console_t* c, int v, int slot,
+                          uint32_t pitch_q16, int vol, int pan, int loop);
+void     cron_apu_env    (cronopio_console_t* c, int v, int attack_ms,
+                          int decay_ms, int sustain, int release_ms);
+void     cron_apu_note_off(cronopio_console_t* c, int v);
 
 void     cron_input_set_pad     (cronopio_console_t* c, int player, uint32_t mask);
 uint32_t cron_input_pad         (const cronopio_console_t* c, int player);

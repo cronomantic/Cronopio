@@ -16,7 +16,7 @@ desktop (SDL2), web (Emscripten) and embedded hardware (HAL).
 ## Specs in one paragraph
 
 320 × 240 @ 60 Hz, 8 bpp indexed framebuffer with a 32-colour
-programmable palette. 4-channel mixer at 22 050 Hz. Two virtual
+programmable palette. 16-voice mixer at 22 050 Hz (synth + PCM). Two virtual
 8-button gamepads. 1 MiB cart RAM, 1 KiB save slot. Framebuffer
 and palette are **CronoVM host-shared regions** carved into the
 cart heap at load time, so plotting a pixel is just a byte store

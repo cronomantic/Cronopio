@@ -69,33 +69,92 @@ void cronopio_console_blit_rgba(const cronopio_console_t* c,
     }
 }
 
+/* Advance one voice's ADSR envelope by one sample; returns the level in
+ * Q8.8 (0..255<<8). A gate voice (no envelope) holds full level until it is
+ * note-off'd, then falls fast to avoid a click. */
+static int env_tick(cron_voice_t* v) {
+    if (!v->has_env) {
+        if (v->env_stage == CRON_ENV_RELEASE) {
+            v->env_level -= 2048;            /* ~31 sample fade */
+            if (v->env_level <= 0) { v->env_level = 0; v->env_stage = CRON_ENV_OFF; }
+        } else {
+            v->env_level = 255 << 8;
+        }
+        return v->env_level;
+    }
+    switch (v->env_stage) {
+        case CRON_ENV_ATTACK:
+            v->env_level += v->env_attack ? (255 << 8) / v->env_attack : (255 << 8);
+            if (v->env_level >= (255 << 8)) { v->env_level = 255 << 8; v->env_stage = CRON_ENV_DECAY; }
+            break;
+        case CRON_ENV_DECAY: {
+            int target = v->env_sustain << 8;
+            int d = v->env_decay ? ((255 - v->env_sustain) << 8) / v->env_decay : (255 << 8);
+            v->env_level -= d;
+            if (v->env_level <= target) { v->env_level = target; v->env_stage = CRON_ENV_SUSTAIN; }
+        } break;
+        case CRON_ENV_SUSTAIN:
+            v->env_level = v->env_sustain << 8;
+            break;
+        case CRON_ENV_RELEASE: {
+            int r = v->env_release ? (255 << 8) / v->env_release : (255 << 8);
+            v->env_level -= r;
+            if (v->env_level <= 0) { v->env_level = 0; v->env_stage = CRON_ENV_OFF; }
+        } break;
+        default: v->env_level = 0; break;
+    }
+    return v->env_level;
+}
+
 void cronopio_console_mix(cronopio_console_t* c, int16_t* dst, int frames) {
     const int sr = CRONOPIO_AUDIO_HZ;
     for (int i = 0; i < frames; ++i) {
         int32_t mix_l = 0, mix_r = 0;
         for (int vi = 0; vi < CRONOPIO_AUDIO_CHANS; ++vi) {
             cron_voice_t* voice = &c->voices[vi];
-            if (voice->vol == 0 || voice->freq_mhz == 0) continue;
-            uint32_t inc = (uint32_t)(((uint64_t)voice->freq_mhz << 32) /
-                                      ((uint64_t)sr * 1000ull));
-            voice->phase += inc;
-            int32_t sample;
-            switch (voice->wave) {
-                case 1: sample = (voice->phase & 0x80000000u) ? 16384 : -16384; break;
-                case 2: {
-                    int32_t t = (int32_t)(voice->phase >> 16);
-                    sample = (t < 0 ? -t : t) - 16384;
-                    sample *= 2;
-                } break;
-                case 3: sample = (int32_t)((voice->phase * 1664525u + 1013904223u) & 0xFFFF) - 32768; break;
-                default: {
-                    int32_t t = (int32_t)(voice->phase >> 16) - 16384;
-                    int32_t t2 = (t * t) >> 14;
-                    sample = ((t * (49152 - t2)) >> 14);
-                } break;
+            if (!voice->active) continue;
+
+            int32_t sample;   /* roughly -16384..16384 */
+            if (voice->mode == 1) {
+                /* PCM: 8-bit signed mono, resampled by pcm_step (Q16.16). */
+                const cron_sample_bank_t* sb = &c->samples[voice->sample];
+                if (!sb->used || !c->heap) { voice->active = 0; continue; }
+                uint32_t idx = voice->pcm_pos >> 16;
+                if (idx >= sb->len) {
+                    if (voice->loop && sb->len) { voice->pcm_pos %= ((uint32_t)sb->len << 16); idx = voice->pcm_pos >> 16; }
+                    else { voice->active = 0; continue; }
+                }
+                int8_t s8 = (int8_t)c->heap[sb->offset + idx];
+                sample = (int32_t)s8 << 7;        /* -128..127 -> ~-16384..16256 */
+                voice->pcm_pos += voice->pcm_step;
+            } else {
+                uint32_t inc = (uint32_t)(((uint64_t)voice->freq_mhz << 32) /
+                                          ((uint64_t)sr * 1000ull));
+                voice->phase += inc;
+                switch (voice->wave) {
+                    case CRON_WAVE_SQR_:   sample = (voice->phase & 0x80000000u) ? 16384 : -16384; break;
+                    case CRON_WAVE_TRI_: {
+                        int32_t t = (int32_t)(voice->phase >> 16);
+                        sample = ((t < 0 ? -t : t) - 16384) * 2;
+                    } break;
+                    case CRON_WAVE_NOISE_: sample = (int32_t)((voice->phase * 1664525u + 1013904223u) & 0xFFFF) - 32768; break;
+                    case CRON_WAVE_PULSE_: sample = ((voice->phase >> 16) < 16384) ? 16384 : -16384; break; /* 25% duty-ish */
+                    default: {  /* sine via parabola */
+                        int32_t t = (int32_t)(voice->phase >> 16) - 16384;
+                        int32_t t2 = (t * t) >> 14;
+                        sample = ((t * (49152 - t2)) >> 14);
+                    } break;
+                }
             }
-            int32_t s = (sample * voice->vol) >> 8;
-            /* Cheap equal-power pan: pan in [-128..127]. */
+
+            /* envelope + voice volume */
+            int env = env_tick(voice);
+            if (voice->env_stage == CRON_ENV_OFF && (voice->has_env || voice->mode == 0)) {
+                /* synth/enveloped voice finished its release */
+                if (voice->mode == 0 || voice->has_env) { voice->active = 0; }
+            }
+            int32_t s = (((sample * voice->vol) >> 8) * (env >> 8)) >> 8;
+
             int32_t lg = 128 - voice->pan; if (lg < 0) lg = 0; if (lg > 255) lg = 255;
             int32_t rg = 128 + voice->pan; if (rg < 0) rg = 0; if (rg > 255) rg = 255;
             mix_l += (s * lg) >> 8;
