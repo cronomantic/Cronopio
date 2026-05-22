@@ -82,6 +82,25 @@ int main(int argc, char** argv) {
         if (hist[c]) { printf("  color %3d : %6u px\n", c, hist[c]); distinct++; }
     printf("distinct colors: %d\n", distinct);
 
+    /* Optional PPM screenshot: `headless cart.bin [frames] [out.ppm]`. Packs
+     * the 8bpp framebuffer through the cart palette into RGB and writes a P6. */
+    if (argc >= 4) {
+        static uint32_t rgba[CRONOPIO_FB_BYTES];
+        cronopio_console_blit_rgba(&console, img.heap, rgba);
+        FILE* p = fopen(argv[3], "wb");
+        if (p) {
+            fprintf(p, "P6\n%d %d\n255\n", CRONOPIO_SCREEN_W, CRONOPIO_SCREEN_H);
+            for (int i = 0; i < CRONOPIO_FB_BYTES; ++i) {
+                uint32_t px = rgba[i];           /* 0xAARRGGBB */
+                uint8_t rgb[3] = { (uint8_t)(px >> 16), (uint8_t)(px >> 8),
+                                   (uint8_t)(px) };
+                fwrite(rgb, 1, 3, p);
+            }
+            fclose(p);
+            printf("wrote screenshot %s\n", argv[3]);
+        }
+    }
+
     cvm_image_free(&img);
     free(blob);
     return 0;
