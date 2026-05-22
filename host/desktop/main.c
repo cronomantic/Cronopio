@@ -98,7 +98,10 @@ static void frame_step(void* arg) {
     cronopio_console_begin_frame(console);
     const Uint8* keys = SDL_GetKeyboardState(NULL);
     console->pad_cur[0] = map_keys_to_pad(keys);
-    /* Snapshot scancodes for cron_key (low 256 cover standard keyboards). */
+    /* Snapshot scancodes for cron_key (low 256 cover standard keyboards).
+     * SDL scancodes are USB HID Keyboard usage IDs, which is exactly the
+     * CRON_KEY_* space cron_key() expects — so the snapshot is a direct copy,
+     * no translation. Keep it that way: carts index this bitmap by HID code. */
     for (int i = 0; i < 32; ++i) {
         uint8_t byte = 0;
         for (int b = 0; b < 8; ++b)

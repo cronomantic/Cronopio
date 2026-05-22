@@ -34,6 +34,43 @@ enum {
     CRON_BTN_Y     = 1u << 7,
 };
 
+/* Keyboard scancodes for cron_key(scancode). The scancode space is the USB
+ * HID Keyboard/Keypad usage page (Usage IDs) — a stable, host-independent
+ * standard. The platform shell fills the 256-bit key bitmap with these codes;
+ * the desktop SDL host's scancodes already are HID usage IDs, so it needs no
+ * translation. Carts should reference these names rather than raw numbers.
+ * Only the codes a typical cart needs are enumerated here; any HID usage ID
+ * in 0..255 is a valid argument to cron_key(). */
+enum {
+    CRON_KEY_A = 0x04, CRON_KEY_B = 0x05, CRON_KEY_C = 0x06, CRON_KEY_D = 0x07,
+    CRON_KEY_E = 0x08, CRON_KEY_F = 0x09, CRON_KEY_G = 0x0A, CRON_KEY_H = 0x0B,
+    CRON_KEY_I = 0x0C, CRON_KEY_J = 0x0D, CRON_KEY_K = 0x0E, CRON_KEY_L = 0x0F,
+    CRON_KEY_M = 0x10, CRON_KEY_N = 0x11, CRON_KEY_O = 0x12, CRON_KEY_P = 0x13,
+    CRON_KEY_Q = 0x14, CRON_KEY_R = 0x15, CRON_KEY_S = 0x16, CRON_KEY_T = 0x17,
+    CRON_KEY_U = 0x18, CRON_KEY_V = 0x19, CRON_KEY_W = 0x1A, CRON_KEY_X = 0x1B,
+    CRON_KEY_Y = 0x1C, CRON_KEY_Z = 0x1D,
+
+    CRON_KEY_1 = 0x1E, CRON_KEY_2 = 0x1F, CRON_KEY_3 = 0x20, CRON_KEY_4 = 0x21,
+    CRON_KEY_5 = 0x22, CRON_KEY_6 = 0x23, CRON_KEY_7 = 0x24, CRON_KEY_8 = 0x25,
+    CRON_KEY_9 = 0x26, CRON_KEY_0 = 0x27,
+
+    CRON_KEY_ENTER     = 0x28, CRON_KEY_ESCAPE    = 0x29, CRON_KEY_BACKSPACE = 0x2A,
+    CRON_KEY_TAB       = 0x2B, CRON_KEY_SPACE     = 0x2C,
+    CRON_KEY_MINUS     = 0x2D, CRON_KEY_EQUALS    = 0x2E,
+
+    CRON_KEY_F1 = 0x3A, CRON_KEY_F2 = 0x3B, CRON_KEY_F3 = 0x3C, CRON_KEY_F4 = 0x3D,
+    CRON_KEY_F5 = 0x3E, CRON_KEY_F6 = 0x3F, CRON_KEY_F7 = 0x40, CRON_KEY_F8 = 0x41,
+    CRON_KEY_F9 = 0x42, CRON_KEY_F10 = 0x43, CRON_KEY_F11 = 0x44, CRON_KEY_F12 = 0x45,
+
+    CRON_KEY_PAUSE  = 0x48,
+    CRON_KEY_COMMA  = 0x36, CRON_KEY_PERIOD = 0x37,
+
+    CRON_KEY_RIGHT = 0x4F, CRON_KEY_LEFT = 0x50, CRON_KEY_DOWN = 0x51, CRON_KEY_UP = 0x52,
+
+    CRON_KEY_LCTRL = 0xE0, CRON_KEY_LSHIFT = 0xE1, CRON_KEY_LALT = 0xE2,
+    CRON_KEY_RCTRL = 0xE4, CRON_KEY_RSHIFT = 0xE5, CRON_KEY_RALT = 0xE6,
+};
+
 enum { CRON_WAVE_SINE = 0, CRON_WAVE_SQUARE = 1, CRON_WAVE_TRI = 2, CRON_WAVE_NOISE = 3 };
 
 /* CronoVM built-in: resolve a host-shared region's offset. Returns the
