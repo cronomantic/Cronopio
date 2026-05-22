@@ -71,30 +71,24 @@ int toupper(int c)  { return islower(c) ? c - ('a' - 'A') : c; }
 
 /* ============================== string.h =============================== */
 
+/* __builtin_mem* lower to the llvm.mem* intrinsics in the -emit-llvm IR, which
+ * cvm-translate turns into the VM's single-instruction MEMCPY/MEMSET/MEMMOVE
+ * opcodes (one host memcpy/memset per call) instead of a per-byte CVM loop.
+ * The builtin is the compiler primitive, not a call to these symbols, so there
+ * is no self-recursion. Profiling DOOM showed the byte-loop memset at ~44% of
+ * all in-level interpreter instructions; this collapses it to ~1 op/call. */
 void *memcpy(void *dst, const void *src, size_t n) {
-    unsigned char *d = (unsigned char *)dst;
-    const unsigned char *s = (const unsigned char *)src;
-    while (n--) *d++ = *s++;
+    __builtin_memcpy(dst, src, n);
     return dst;
 }
 
 void *memmove(void *dst, const void *src, size_t n) {
-    unsigned char *d = (unsigned char *)dst;
-    const unsigned char *s = (const unsigned char *)src;
-    if (d == s || n == 0) return dst;
-    if (d < s) {
-        while (n--) *d++ = *s++;
-    } else {
-        d += n; s += n;
-        while (n--) *--d = *--s;
-    }
+    __builtin_memmove(dst, src, n);
     return dst;
 }
 
 void *memset(void *dst, int c, size_t n) {
-    unsigned char *d = (unsigned char *)dst;
-    unsigned char v = (unsigned char)c;
-    while (n--) *d++ = v;
+    __builtin_memset(dst, c, n);
     return dst;
 }
 

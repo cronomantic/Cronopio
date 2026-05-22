@@ -60,6 +60,22 @@ ordinary C pointers after a one-call `cron_resolve_video()` at
 startup. Bundled assets (a DOOM WAD, etc.) are baked in with
 `cvm-cc --rom=FILE` and read through `cron_rom()` / `cron_rom_size()`,
 which front the CronoVM `cvm_sys_rom_*` built-ins.
+`sdk/lib/cvm_libc.c` is the bundled freestanding libc; its block
+primitives (`memset`/`memcpy`/`memmove`) are written with
+`__builtin_mem*` so the translator lowers them to CronoVM's single
+`MEMSET`/`MEMCPY`/`MEMMOVE` opcodes (one host call each) rather than a
+per-byte VM loop — a large win for memory-heavy carts.
+
+**`tools/headless/`** — windowless cart runners that link only
+`host/common/` (no SDL). `cronopio-headless` drives N frames and prints
+a framebuffer histogram (and an optional PPM), for CI / "does this cart
+render" checks. `cronopio-headless-prof` is the same harness built
+against a `-DCVM_PROFILE` CronoVM (see CronoVM `CHANGELOG`): it ranks
+functions by interpreter self-time, resolving names from the `CVM_SYMS`
+`<cart>.bin.sym` sidecar, with a `warmup` arg to drop startup cost and a
+`CVM_PROF_WATCH=<fid>` caller histogram. It is built standalone (not via
+CMake) — one `clang -DCVM_PROFILE` over `cvm.c` + `host/common/*.c` +
+`headless_prof.c`; the recipe is in the file header.
 
 ## Why this layout
 
