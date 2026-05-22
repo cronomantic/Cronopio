@@ -14,8 +14,12 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* Defined in the SDL host; the common layer calls it for sys_time_ms. */
-uint64_t cronopio_platform_ticks_ms(void) { return 0; }
+/* Defined in the SDL host; the common layer calls it for sys_time_ms. A frozen
+ * clock makes time-driven carts (e.g. DOOM, whose title/demo state machine only
+ * advances when I_GetTime() ticks) render nothing, so advance a virtual 60Hz
+ * clock: the frame loop bumps g_frame_ms by ~16ms before each frame. */
+static uint64_t g_frame_ms = 0;
+uint64_t cronopio_platform_ticks_ms(void) { return g_frame_ms; }
 
 static uint8_t* slurp(const char* path, size_t* out_len) {
     FILE* f = fopen(path, "rb");
@@ -55,6 +59,7 @@ int main(int argc, char** argv) {
     }
 
     for (int f = 0; f < frames && !console.cart_exited; ++f) {
+        g_frame_ms = (uint64_t)f * 1000u / 60u;   /* virtual 60Hz clock */
         cronopio_console_begin_frame(&console);
         if (console.frame_fn_index > 0) {
             int32_t fr = 0;
