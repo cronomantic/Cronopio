@@ -346,6 +346,14 @@ void cron_gpu_cmap(cronopio_console_t* c, uint32_t offset, int set);
 void cron_gpu_tcol(cronopio_console_t* c, uint8_t* heap, int x, int y0, int y1,
                    uint32_t src_off, int mask, int32_t frac, int32_t step);
 
+/* Masked vertical column: like cron_gpu_tcol but the source is addressed
+ * LINEARLY (no power-of-two wrap) — fb = cmap[src[frac>>16]]. For DOOM-style
+ * masked posts (sprites, weapon) where each opaque run indexes its own post
+ * data and the caller guarantees the index stays in range. The syscall bounds
+ * the source by the actual index span, not a (here meaningless) mask. */
+void cron_gpu_tcolm(cronopio_console_t* c, uint8_t* heap, int x, int y0, int y1,
+                    uint32_t src_off, int32_t frac, int32_t step);
+
 /* Horizontal textured span at screen y, cols [x0,x1], over a 64x64 source.
  * (u,v) Q16.16 advance by (du,dv); index = ((v>>16)&63)*64 + ((u>>16)&63). */
 void cron_gpu_tspan(cronopio_console_t* c, uint8_t* heap, int y, int x0, int x1,

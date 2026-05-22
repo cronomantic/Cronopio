@@ -347,6 +347,23 @@ static int sys_tcol(struct cvm_image *img, int32_t *r, void *ud) {
     r[0] = 0; return 0;
 }
 
+static int sys_tcolm(struct cvm_image *img, int32_t *r, void *ud) {
+    GUARD;
+    uint32_t src  = (uint32_t)r[3];
+    int32_t  y0   = r[1], y1 = r[2];
+    int32_t  frac = r[4], step = r[5];
+    /* Bound the source by the ACTUAL linear index span over [y0,y1] (index =
+     * frac>>16 stepping by `step`), not by a power-of-two mask. Check both ends;
+     * clipping only shrinks the range, so this is conservative. */
+    int     n    = (y1 >= y0) ? (y1 - y0) : 0;
+    int64_t i0   = (int64_t)((uint32_t)frac >> 16);
+    int64_t i1   = (int64_t)((uint32_t)(frac + step * n) >> 16);
+    int64_t imax = i0 > i1 ? i0 : i1;
+    if (imax < 0 || (uint64_t)src + (uint64_t)imax + 1u > img->mem_size) { r[0] = 0; return 0; }
+    cron_gpu_tcolm(X->c, HEAP, (int)r[0], y0, y1, src, frac, step);
+    r[0] = 0; return 0;
+}
+
 static int sys_tspan(struct cvm_image *img, int32_t *r, void *ud) {
     GUARD;
     uint32_t src = (uint32_t)r[3];
@@ -602,6 +619,7 @@ static const entry_t kSyscalls[] = {
     { "cvm_sys_cron_blt_ex",       sys_blt_ex       },
     { "cvm_sys_cron_cmap",         sys_cmap         },
     { "cvm_sys_cron_tcol",         sys_tcol         },
+    { "cvm_sys_cron_tcolm",        sys_tcolm        },
     { "cvm_sys_cron_tspan",        sys_tspan        },
     /* 3D triangle submission */
     { "cvm_sys_cron_zbuf",         sys_zbuf         },

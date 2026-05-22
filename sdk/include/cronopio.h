@@ -113,6 +113,7 @@ extern void     cvm_sys_cron_pal_reset   (void);
 extern void     cvm_sys_cron_blt_ex      (int32_t img, int32_t dx, int32_t dy, int32_t srcpack, int32_t dimpack, int32_t colkey, int32_t rotate, int32_t scale_q16);
 extern void     cvm_sys_cron_cmap        (const uint8_t* ptr);
 extern void     cvm_sys_cron_tcol        (int32_t x, int32_t y0, int32_t y1, const uint8_t* src, int32_t mask, int32_t frac, int32_t step);
+extern void     cvm_sys_cron_tcolm       (int32_t x, int32_t y0, int32_t y1, const uint8_t* src, int32_t frac, int32_t step);
 extern void     cvm_sys_cron_tspan       (int32_t y, int32_t x0, int32_t x1, const uint8_t* src, int32_t u, int32_t v, int32_t du, int32_t dv);
 
 /* 3D triangle submission (0x120). */
@@ -222,6 +223,10 @@ static inline void     cron_cmap        (const uint8_t* ptr) { cvm_sys_cron_cmap
 /* Vertical textured column: rows [y0,y1] at screen x; src is (mask+1) bytes
  * (mask = texture_height-1, power of two); frac/step are Q16.16. */
 static inline void     cron_tcol        (int32_t x, int32_t y0, int32_t y1, const uint8_t* src, int32_t mask, int32_t frac, int32_t step) { cvm_sys_cron_tcol(x, y0, y1, src, mask, frac, step); }
+/* Masked vertical column: src addressed LINEARLY (no wrap), src[frac>>16]. For
+ * DOOM-style masked posts (sprites/weapon); the caller keeps the index in the
+ * post and the host bounds it by the index span, not a mask. */
+static inline void     cron_tcolm       (int32_t x, int32_t y0, int32_t y1, const uint8_t* src, int32_t frac, int32_t step) { cvm_sys_cron_tcolm(x, y0, y1, src, frac, step); }
 /* Horizontal textured span over a 64x64 source: cols [x0,x1] at screen y;
  * (u,v) Q16.16 advance by (du,dv). */
 static inline void     cron_tspan       (int32_t y, int32_t x0, int32_t x1, const uint8_t* src, int32_t u, int32_t v, int32_t du, int32_t dv) { cvm_sys_cron_tspan(y, x0, x1, src, u, v, du, dv); }

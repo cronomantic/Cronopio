@@ -170,6 +170,7 @@ shape it:
 | `cron_blt_ex`         | `void(img, dx, dy, sx, sy, w, h, colkey, rotate, scale_q16)`                | Rotozoom blit: scale `scale_q16` (Q16.16, `CRON_SCALE_1X`=0x10000) and `rotate` degrees clockwise about the sprite centre (placed at dx+w/2, dy+h/2), nearest-neighbour. sx/sy and w/h are packed by the SDK to fit the syscall's 8 args. |
 | `cron_cmap`           | `void(const u8* ptr)`                                                       | Set the active 256-byte light/colormap for tcol/tspan; NULL = identity |
 | `cron_tcol`           | `void(x, y0, y1, const u8* src, mask, frac, step)`                         | Vertical textured column (DOOM R_DrawColumn): rows [y0,y1] at x; src is (mask+1) bytes, mask=texh-1 (pow2); frac/step Q16.16; writes cmap[src[(frac>>16)&mask]] |
+| `cron_tcolm`          | `void(x, y0, y1, const u8* src, frac, step)`                               | Masked vertical column (DOOM masked posts: sprites/weapon): like `cron_tcol` but src is addressed LINEARLY (no pow2 wrap) — writes cmap[src[frac>>16]]. The host bounds src by the actual index span over [y0,y1], so no mask is needed. Caller keeps the index within the post |
 | `cron_tspan`          | `void(y, x0, x1, const u8* src, u, v, du, dv)`                             | Horizontal textured span (DOOM R_DrawSpan) over a 64×64 src: cols [x0,x1] at y; (u,v) Q16.16 step (du,dv); writes cmap[src[((v>>16)&63)*64+((u>>16)&63)]] |
 
 `tcol`/`tspan` are the perf escape hatch for software 3D: they run the hot

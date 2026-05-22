@@ -523,6 +523,21 @@ void cron_gpu_tcol(cronopio_console_t* c, uint8_t* heap, int x, int y0, int y1,
     }
 }
 
+void cron_gpu_tcolm(cronopio_console_t* c, uint8_t* heap, int x, int y0, int y1,
+                    uint32_t src_off, int32_t frac, int32_t step) {
+    if (x < c->draw.clip_x0 || x >= c->draw.clip_x1) return;
+    if (y0 < c->draw.clip_y0) { frac += step * (c->draw.clip_y0 - y0); y0 = c->draw.clip_y0; }
+    if (y1 >= c->draw.clip_y1) y1 = c->draw.clip_y1 - 1;
+    const uint8_t* src = heap + src_off;
+    const uint8_t* cm  = c->cmap_set ? heap + c->cmap_offset : 0;
+    uint8_t* fb = heap + c->fb_offset;
+    for (int y = y0; y <= y1; ++y) {
+        uint8_t s = src[(uint32_t)frac >> 16];   /* linear, no wrap */
+        fb[y * CRONOPIO_SCREEN_W + x] = cm ? cm[s] : s;
+        frac += step;
+    }
+}
+
 void cron_gpu_tspan(cronopio_console_t* c, uint8_t* heap, int y, int x0, int x1,
                     uint32_t src_off, int32_t u, int32_t v, int32_t du, int32_t dv) {
     if (y < c->draw.clip_y0 || y >= c->draw.clip_y1) return;
