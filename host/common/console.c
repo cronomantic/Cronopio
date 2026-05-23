@@ -1,12 +1,6 @@
 #include "console.h"
 
 #include <string.h>
-#include <stdio.h>
-
-/* Default (BIOS) SoundFont filename, looked up relative to the working dir at
- * console init. The platform shell may load a better path via
- * cron_synth_load_default. Ships beside the executable like SDL2.dll. */
-#define CRONOPIO_DEFAULT_SF2  "GeneralUser-GS.sf2"
 
 /* A pleasant 32-colour starter set occupies indices 0..31; seed_palette
  * fills 32..255 with a grayscale ramp so all 256 entries are valid for a
@@ -26,15 +20,11 @@ void cronopio_console_init(cronopio_console_t* c) {
     c->frame_fn_index  = -1;
     cron_gpu_reset_state(c);   /* clip=full screen, camera=0, pal=identity */
 
-    /* Bring up the MIDI+SoundFont synth and load the default (BIOS) bank. A
-     * missing default font is non-fatal: MIDI music stays silent until a cart
-     * supplies its own SoundFont via cron_sf2_load. */
+    /* Bring up the MIDI+SoundFont synth. Loading the default (BIOS) bank is the
+     * platform shell's job (cron_synth_load_default) — the console stays
+     * target-agnostic about where assets live (file, fetch, flash...). MIDI
+     * music is silent until a font is loaded. */
     c->synth = cron_synth_create();
-    if (c->synth && cron_synth_load_default(c->synth, CRONOPIO_DEFAULT_SF2) != 0) {
-        fprintf(stderr, "[cronopio] default SoundFont '%s' not found; "
-                        "MIDI music silent until a cart loads one\n",
-                CRONOPIO_DEFAULT_SF2);
-    }
 }
 
 void cronopio_console_begin_frame(cronopio_console_t* c) {

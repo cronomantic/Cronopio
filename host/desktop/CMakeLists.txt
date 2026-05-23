@@ -17,6 +17,12 @@ add_executable(cronopio main.c)
 # references undefined.
 target_link_libraries(cronopio PRIVATE cronopio_common SDL2::SDL2main SDL2::SDL2)
 
+# Dev fallback: point at the in-tree default SoundFont so the host finds it
+# when run straight from the build tree (the distribution ships it beside the
+# exe instead). CMAKE_SOURCE_DIR is the Cronopio repo root.
+target_compile_definitions(cronopio PRIVATE
+    CRONOPIO_SOURCE_SF2="${CMAKE_SOURCE_DIR}/assets/bios/GeneralUser-GS.sf2")
+
 if(CRONOPIO_INSTALL)
     include(GNUInstallDirs)
     install(TARGETS cronopio RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

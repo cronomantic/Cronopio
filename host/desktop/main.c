@@ -171,6 +171,33 @@ int main(int argc, char** argv) {
     cronopio_console_init(&console);
     console.boot_ms = SDL_GetTicks();
 
+    /* Load the default (BIOS) General MIDI SoundFont that ships with Cronopio.
+     * Try beside the executable first (the distribution layout), then the
+     * in-tree asset path baked at configure time (dev builds). Non-fatal:
+     * MIDI music is simply silent until a cart supplies its own .sf2. */
+    {
+        char* base = SDL_GetBasePath();
+        char path[1024];
+        int loaded = 0;
+        if (base) {
+            SDL_snprintf(path, sizeof(path), "%s%s", base, "GeneralUser-GS.sf2");
+            loaded = (cron_synth_load_default(console.synth, path) == 0);
+            if (!loaded) {
+                SDL_snprintf(path, sizeof(path), "%s%s", base,
+                             "assets/bios/GeneralUser-GS.sf2");
+                loaded = (cron_synth_load_default(console.synth, path) == 0);
+            }
+            SDL_free(base);
+        }
+#ifdef CRONOPIO_SOURCE_SF2
+        if (!loaded)
+            loaded = (cron_synth_load_default(console.synth, CRONOPIO_SOURCE_SF2) == 0);
+#endif
+        if (!loaded)
+            fprintf(stderr, "[cronopio] default SoundFont not found; "
+                            "MIDI music silent until a cart loads one\n");
+    }
+
     if (cronopio_resolve_video_regions(&img, &console) != 0) {
         fprintf(stderr,
                 "warning: cart did not declare 'fb' and 'pal' regions — "
