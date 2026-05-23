@@ -11,6 +11,19 @@
  * `warmup` frames run before the counters are zeroed, so one-time startup
  * cost (DEH parsing, level setup, table init) is excluded and what remains is
  * steady-state per-frame work.
+ *
+ * Built standalone (not via CMake) — one clang invocation over a profiler-
+ * enabled cvm.c plus all of host/common/. `-std=gnu23` is required because
+ * bios_sf2.c embeds the default SoundFont with C23 #embed, and TinySoundFont
+ * (used by midisynth.c) is included from external/:
+ *
+ *   CR=<cronopio-root>; CVM=$CR/external/CronoVM
+ *   clang -O2 -std=gnu23 -DCVM_PROFILE \
+ *     -I $CVM/include -I $CR/host/common -I $CR/external/TinySoundFont \
+ *     $CVM/src/cvm.c $CR/host/common/*.c $CR/tools/headless/headless_prof.c \
+ *     -o cronopio-headless-prof.exe -lm
+ *
+ * Then build the cart with CVM_SYMS=1 so cvm-translate emits <cart>.bin.sym.
  */
 #include "console.h"
 #include "syscalls.h"
