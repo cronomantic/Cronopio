@@ -155,7 +155,7 @@ void cronopio_console_mix(cronopio_console_t* c, int16_t* dst, int frames) {
                 if (idx >= voice->pcm_len) { voice->active = 0; continue; }
                 uint8_t b = c->heap[voice->pcm_off + idx];
                 int32_t s8 = voice->pcm_unsigned ? ((int32_t)b - 128) : (int32_t)(int8_t)b;
-                sample = s8 << 7;                 /* -128..127 -> ~-16384..16256 */
+                sample = s8 << 8;                 /* -128..127 -> ~-32768..32512 (full scale) */
                 voice->pcm_pos += voice->pcm_step;
             } else {
                 uint32_t inc = (uint32_t)(((uint64_t)voice->freq_mhz << 32) /
