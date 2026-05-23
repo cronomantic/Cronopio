@@ -27,6 +27,11 @@
 #define CRON_SF_SLOTS    4      /* slot 0 = default (BIOS) font, 1.. = cart-loaded */
 #define CRON_MIDI_RING   2048   /* SPSC event ring depth (power of two) */
 
+/* Headroom applied to the synth's global gain on top of the cart's music
+ * volume (cron_midi_volume). The SoundFont renders hot relative to the PCM
+ * voices (SFX), so pull music down a few dB to sit under the SFX. ~-3.7 dB. */
+#define MUSIC_HEADROOM   0.65f
+
 /* Control events share the ring with MIDI messages. Real MIDI status bytes are
  * 0x80..0xEF; we tag control commands with the otherwise-unused 0xF0..0xFF
  * system range so one ring carries both. d1/d2 carry the command arguments. */
@@ -51,7 +56,7 @@ typedef struct cron_synth {
 static void synth_config_font(cron_synth* s, tsf* f) {
     if (!f) return;
     tsf_set_output(f, TSF_STEREO_INTERLEAVED, CRONOPIO_AUDIO_HZ, 0.0f);
-    tsf_set_volume(f, s->music_gain);
+    tsf_set_volume(f, s->music_gain * MUSIC_HEADROOM);
     tsf_set_max_voices(f, 48);
     /* GM: channel 10 (0-based 9) is the percussion kit. */
     tsf_channel_set_presetnumber(f, 9, 0, 1);
@@ -121,7 +126,7 @@ static void synth_drain(cron_synth* s) {
             case CRON_CMD_VOLUME: {
                 s->music_gain = (float)d1 / 255.0f;
                 for (int i = 0; i < CRON_SF_SLOTS; ++i)
-                    if (s->fonts[i]) tsf_set_volume(s->fonts[i], s->music_gain);
+                    if (s->fonts[i]) tsf_set_volume(s->fonts[i], s->music_gain * MUSIC_HEADROOM);
                 break;
             }
             default: break;
