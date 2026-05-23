@@ -117,6 +117,12 @@ extern void     cvm_sys_cron_env         (int32_t voice, int32_t attack_ms, int3
 extern void     cvm_sys_cron_note_off    (int32_t voice);
 extern int32_t  cvm_sys_cron_mod_play     (const void* mod, int32_t len, int32_t loop);
 extern void     cvm_sys_cron_mod_stop     (void);
+extern int32_t  cvm_sys_cron_sf2_load       (const void* sf2, int32_t len);
+extern void     cvm_sys_cron_sf2_free       (int32_t handle);
+extern void     cvm_sys_cron_midi_soundfont (int32_t handle);
+extern void     cvm_sys_cron_midi_send      (int32_t status, int32_t d1, int32_t d2);
+extern void     cvm_sys_cron_midi_reset     (void);
+extern void     cvm_sys_cron_midi_volume    (int32_t vol);
 
 extern uint32_t cvm_sys_cron_pad         (int32_t player);
 extern uint32_t cvm_sys_cron_pad_pressed (int32_t player);
@@ -206,6 +212,19 @@ static inline void     cron_mod_stop     (void)                           { cvm_
  * own OPL2 emulator — or any streamed audio. */
 static inline int32_t  cron_stream       (const int16_t* frames, int32_t nframes) { return cvm_sys_cron_stream(frames, nframes); }
 static inline int32_t  cron_stream_free  (void)                           { return cvm_sys_cron_stream_free(); }
+
+/* MIDI + SoundFont music synth (host-native, TinySoundFont). The console ships
+ * a default General MIDI bank (handle 0); a cart may load its own .sf2 from RAM
+ * or ROM with cron_sf2_load (-> handle >=1) and select it with cron_midi_soundfont.
+ * Feed it raw MIDI messages with cron_midi_send (e.g. a DOOM MUS->MIDI stream):
+ * status is the MIDI status byte (note on/off 0x9n/0x8n, CC 0xBn, program 0xCn,
+ * pitch-bend 0xEn), d1/d2 the data bytes. Near-zero VM cost; the host synthesises. */
+static inline int32_t  cron_sf2_load       (const void* sf2, int32_t len) { return cvm_sys_cron_sf2_load(sf2, len); }
+static inline void     cron_sf2_free       (int32_t handle)               { cvm_sys_cron_sf2_free(handle); }
+static inline void     cron_midi_soundfont (int32_t handle)               { cvm_sys_cron_midi_soundfont(handle); }
+static inline void     cron_midi_send      (int32_t status, int32_t d1, int32_t d2) { cvm_sys_cron_midi_send(status, d1, d2); }
+static inline void     cron_midi_reset     (void)                         { cvm_sys_cron_midi_reset(); }
+static inline void     cron_midi_volume    (int32_t vol)                  { cvm_sys_cron_midi_volume(vol); }
 
 static inline uint32_t cron_pad         (int32_t p)                       { return cvm_sys_cron_pad(p); }
 static inline uint32_t cron_pad_pressed (int32_t p)                       { return cvm_sys_cron_pad_pressed(p); }

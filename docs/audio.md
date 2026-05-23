@@ -69,14 +69,53 @@ the Amiga period. SFX use the voices above the module's channel count.
 Supported: 4/6/8-channel modules, sample sustain loops, and the common
 effects `Cxx` (set volume), `Fxx` (speed/tempo), `Bxx` (position jump),
 `Dxx` (pattern break), `9xx` (sample offset), `Axy` (volume slide). Other
-effects are ignored for now (the note still plays). MIDI is **deferred** —
-it needs an instrument synth (FM/OPL or a GM sample bank); the path there is
-a future FM voice mode, or converting MIDI to MOD/patterns offline.
+effects are ignored for now (the note still plays).
+
+> **Status note:** MOD is now considered the same *category* as the MIDI +
+> SoundFont engine below (a sequence driving a sample bank) and is **demoted**:
+> for the 90s-console identity, MIDI + SoundFont is the primary music path. MOD
+> stays for now but may be retired/reimplemented as a frontend over the synth.
+
+## Layer 4 — music: MIDI + SoundFont (the primary engine)
+
+The native music model for a 90s-class console: a **MIDI sequence over a
+sample bank** (the PSX VAB / AWE32 model). The host owns a **MIDI + SoundFont
+synthesizer** ([TinySoundFont](https://github.com/schellingb/TinySoundFont),
+vendored at `external/TinySoundFont`); the cart runs only the sequencer (e.g.
+DOOM's MUS→MIDI) and pushes MIDI messages. Synthesis is host-native, so VM cost
+is negligible — the same reason the rasteriser is offloaded to GPU primitives.
+
+The console ships a **default General MIDI SoundFont** (handle 0, "BIOS"):
+`GeneralUser GS`, loaded at init from `GeneralUser-GS.sf2` beside the executable
+(like `SDL2.dll`). A missing file is non-fatal — music is silent until a cart
+loads its own bank. A cart may load its own `.sf2` from RAM/ROM with
+`cron_sf2_load` (→ handle ≥1) and select it with `cron_midi_soundfont`; ROM
+cost is then the programmer's choice.
+
+| Name                 | Signature                                  | Notes |
+|----------------------|--------------------------------------------|-------|
+| `cron_midi_send`     | `void(i32 status, i32 d1, i32 d2)`         | One MIDI message: note on `0x9n`, note off `0x8n`, CC `0xBn`, program `0xCn`, pitch-bend `0xEn`. Channel 10 (`0x_9`) is GM percussion. |
+| `cron_midi_volume`   | `void(i32 vol)`                            | Music master 0..255 (independent of `cron_snd_master`) |
+| `cron_midi_reset`    | `void()`                                   | All notes off / panic |
+| `cron_sf2_load`      | `i32(const void* sf2, i32 len)`            | Parse a SoundFont from cart memory → handle ≥1, or -1 |
+| `cron_sf2_free`      | `void(i32 handle)`                         | Free a cart-loaded SoundFont slot |
+| `cron_midi_soundfont`| `void(i32 handle)`                         | Select the active bank (0 = default BIOS bank) |
+
+**Threading.** The cart thread is a single producer pushing MIDI/control events
+into a lock-free SPSC ring; the audio thread (the mixer) is the single consumer
+and the only thread that touches a live synth instance. `cron_sf2_load` parses a
+brand-new instance off the audio thread (safe — not yet visible to the mixer);
+it becomes active only via the ring `SELECT` the mixer processes.
+
+**Limitations** (TinySoundFont v0.9): SF2 modulators and reverb/chorus are not
+implemented, and the low-pass filter is basic. The base synthesis (samples,
+ADSR envelopes, GM presets) is faithful enough for game music.
 
 ## Syscall range
 
 `0x200–0x2FF` — extended audio. `0x200` block = Layer 1 (samples + voices)
-and SFX triggers; `0x220` block = MOD music.
+and SFX triggers; `0x220` block = MOD music; `0x240` block = MIDI + SoundFont
+synth (Layer 4).
 
 ## DOOM audio
 
@@ -86,15 +125,17 @@ and SFX triggers; `0x220` block = MOD music.
   pan, 0)` — vol/pan from DOOM's distance/angle, optional pitch wobble. It
   manages ~8 voices with DOOM's priority/cutoff logic; SFX use voices above
   the MOD channel count (or any free voices if no MOD is playing).
-- **Music** is MUS (a MIDI variant) — note events, no sound. The port renders
-  it with its own bundled **OPL2 emulator** (the authentic DOS sound) into
-  16-bit stereo and feeds the host via `cron_stream` each frame (sized by
-  `cron_stream_free`). The console stays synth-agnostic; the same path serves
-  any streamed music. (A host-side OPL+MUS player remains a possible future
-  alternative; not needed for a port.)
+- **Music** is MUS (a MIDI variant) — note events, no sound. The port converts
+  MUS→MIDI in the cart (`mus2mid`/`midifile`, already in the tree) and feeds the
+  events to the host MIDI + SoundFont synth (Layer 4) via `cron_midi_send`,
+  played against the default GM bank (or a cart-supplied `.sf2`). This matches
+  the 90s-console identity — sampled GM, not the "tinny" OPL/Adlib sound — and
+  costs almost nothing on the VM. (OPL/Adlib was considered and dropped to avoid
+  a redundant second music path.)
 
 ## Status
 
 Implemented: Layer 1 voices (synth + PCM + ADSR, sample banks), SFX as direct
-triggers, and the MOD player (Layer 3). MIDI/FM is the remaining audio item,
-deferred until a cart needs it.
+triggers, the MOD player (Layer 3), and the **MIDI + SoundFont synth (Layer 4)**
+with a default GM "BIOS" bank and cart-loadable `.sf2`. Remaining: the DOOM cart
+music backend (MUS→MIDI→`cron_midi_send`) and wiring SFX via `cron_sample_u8`.

@@ -1,3 +1,6 @@
 [submodule "external/CronoVM"]
 	path = external/CronoVM
 	url = https://github.com/cronomantic/CronoVM
+[submodule "external/TinySoundFont"]
+	path = external/TinySoundFont
+	url = https://github.com/schellingb/TinySoundFont

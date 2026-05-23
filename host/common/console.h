@@ -191,6 +191,7 @@ typedef struct {
     cron_sample_bank_t samples[CRONOPIO_SAMPLE_SLOTS];
     int                master_vol_q8;            /* 0..256 */
     cron_mod_t         mod;                       /* host-side MOD player */
+    void*              synth;                     /* MIDI+SoundFont synth (midisynth.c, opaque cron_synth*) */
 
     /* Streaming PCM ring (16-bit stereo). head written by the cart thread
      * (cron_stream), tail by the audio thread (mixer); single-producer /
@@ -274,6 +275,22 @@ void     cron_apu_note_off(cronopio_console_t* c, int v);
 int      cron_mod_play(cronopio_console_t* c, uint32_t off, uint32_t len, int loop);
 void     cron_mod_stop(cronopio_console_t* c);
 void     cron_mod_tick(cronopio_console_t* c);
+
+/* MIDI + SoundFont synth (midisynth.c). The handle is an opaque cron_synth*
+ * stored in cronopio_console_t::synth. _load_default and _load_mem touch tsf
+ * directly and must run off the audio thread (init / cart thread); the _send/
+ * _select/_free/_reset/_volume calls are lock-free producers feeding an SPSC
+ * ring the mixer drains in cron_synth_render. */
+void*    cron_synth_create(void);
+void     cron_synth_destroy(void* synth);
+int      cron_synth_load_default(void* synth, const char* path);   /* slot 0 (BIOS); 0/-1 */
+int      cron_synth_load_mem(void* synth, const void* sf2, int len);/* cart: -> slot>=1 or -1 */
+void     cron_synth_free_slot(void* synth, int slot);
+void     cron_synth_select(void* synth, int slot);                 /* 0 = default bank */
+void     cron_synth_send(void* synth, int status, int d1, int d2); /* one MIDI message */
+void     cron_synth_reset(void* synth);                            /* all notes off */
+void     cron_synth_volume(void* synth, int vol);                  /* music master 0..255 */
+void     cron_synth_render(void* synth, int16_t* out, int frames); /* audio thread */
 
 void     cron_input_set_pad     (cronopio_console_t* c, int player, uint32_t mask);
 uint32_t cron_input_pad         (const cronopio_console_t* c, int player);

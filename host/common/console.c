@@ -1,6 +1,12 @@
 #include "console.h"
 
 #include <string.h>
+#include <stdio.h>
+
+/* Default (BIOS) SoundFont filename, looked up relative to the working dir at
+ * console init. The platform shell may load a better path via
+ * cron_synth_load_default. Ships beside the executable like SDL2.dll. */
+#define CRONOPIO_DEFAULT_SF2  "GeneralUser-GS.sf2"
 
 /* A pleasant 32-colour starter set occupies indices 0..31; seed_palette
  * fills 32..255 with a grayscale ramp so all 256 entries are valid for a
@@ -19,6 +25,16 @@ void cronopio_console_init(cronopio_console_t* c) {
     c->prng_state      = 0xC0FFEE01u;
     c->frame_fn_index  = -1;
     cron_gpu_reset_state(c);   /* clip=full screen, camera=0, pal=identity */
+
+    /* Bring up the MIDI+SoundFont synth and load the default (BIOS) bank. A
+     * missing default font is non-fatal: MIDI music stays silent until a cart
+     * supplies its own SoundFont via cron_sf2_load. */
+    c->synth = cron_synth_create();
+    if (c->synth && cron_synth_load_default(c->synth, CRONOPIO_DEFAULT_SF2) != 0) {
+        fprintf(stderr, "[cronopio] default SoundFont '%s' not found; "
+                        "MIDI music silent until a cart loads one\n",
+                CRONOPIO_DEFAULT_SF2);
+    }
 }
 
 void cronopio_console_begin_frame(cronopio_console_t* c) {
@@ -108,6 +124,14 @@ static int env_tick(cron_voice_t* v) {
 
 void cronopio_console_mix(cronopio_console_t* c, int16_t* dst, int frames) {
     const int sr = CRONOPIO_AUDIO_HZ;
+
+    /* Render the MIDI+SoundFont synth for the whole block up front (it also
+     * drains its event ring here, on this audio thread). Sized generously vs
+     * the host's audio buffer (~1024 frames); clamp defensively. */
+    static int16_t synth_buf[CRONOPIO_STREAM_FRAMES * 2];
+    int synth_frames = frames > CRONOPIO_STREAM_FRAMES ? CRONOPIO_STREAM_FRAMES : frames;
+    if (c->synth) cron_synth_render(c->synth, synth_buf, synth_frames);
+
     for (int i = 0; i < frames; ++i) {
         /* Advance the MOD player at its tick rate. */
         if (c->mod.playing) {
@@ -180,6 +204,12 @@ void cronopio_console_mix(cronopio_console_t* c, int16_t* dst, int frames) {
             mix_l += c->stream[c->stream_tail * 2];
             mix_r += c->stream[c->stream_tail * 2 + 1];
             c->stream_tail = (c->stream_tail + 1) % CRONOPIO_STREAM_FRAMES;
+        }
+
+        /* Add the MIDI+SoundFont synth (music) for this frame. */
+        if (c->synth && i < synth_frames) {
+            mix_l += synth_buf[i * 2];
+            mix_r += synth_buf[i * 2 + 1];
         }
 
         mix_l = (mix_l * c->master_vol_q8) >> 8;

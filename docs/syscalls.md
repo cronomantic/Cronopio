@@ -93,6 +93,20 @@ future ABI lets carts flush mid-frame.
 | `cvm_sys_cron_stream`      | `i32(const i16* frames, i32 nframes)`           | Queue 16-bit stereo frames into the playback ring; returns queued |
 | `cvm_sys_cron_stream_free` | `i32()`                                         | Frames the stream ring can accept now          |
 
+### Music (MIDI + SoundFont)
+
+Host-native MIDI synth (TinySoundFont). Default GM bank is handle 0; carts may
+load their own `.sf2`. See [audio.md](audio.md) Layer 4.
+
+| Name                          | Signature                            | Notes                                          |
+|-------------------------------|--------------------------------------|------------------------------------------------|
+| `cvm_sys_cron_midi_send`      | `void(i32 status, i32 d1, i32 d2)`   | One MIDI message (note/CC/program/pitch-bend)  |
+| `cvm_sys_cron_midi_volume`    | `void(i32 vol)`                      | Music master 0..255                            |
+| `cvm_sys_cron_midi_reset`     | `void()`                             | All notes off / panic                          |
+| `cvm_sys_cron_sf2_load`       | `i32(const void* sf2, i32 len)`      | Load a SoundFont from RAM/ROM → handle ≥1 / -1 |
+| `cvm_sys_cron_sf2_free`       | `void(i32 handle)`                   | Free a cart-loaded SoundFont                   |
+| `cvm_sys_cron_midi_soundfont` | `void(i32 handle)`                   | Select active bank (0 = default BIOS bank)     |
+
 ## Input
 
 | Name                          | Signature                       | Notes                                    |

@@ -477,6 +477,47 @@ static int sys_snd_master(struct cvm_image *img, int32_t *r, void *ud) {
     return 0;
 }
 
+/* --- MIDI + SoundFont synth (midisynth.c) ------------------------------- */
+
+static int sys_sf2_load(struct cvm_image *img, int32_t *r, void *ud) {
+    ctx_t *x = (ctx_t*)ud;
+    uint32_t off = (uint32_t)r[0], len = (uint32_t)r[1];
+    if (!x->c->heap || (uint64_t)off + len > img->mem_size) { r[0] = -1; return 0; }
+    r[0] = cron_synth_load_mem(x->c->synth, x->c->heap + off, (int)len);
+    return 0;
+}
+static int sys_sf2_free(struct cvm_image *img, int32_t *r, void *ud) {
+    (void)img;
+    cron_synth_free_slot(((ctx_t*)ud)->c->synth, (int)r[0]);
+    r[0] = 0;
+    return 0;
+}
+static int sys_midi_soundfont(struct cvm_image *img, int32_t *r, void *ud) {
+    (void)img;
+    cron_synth_select(((ctx_t*)ud)->c->synth, (int)r[0]);
+    r[0] = 0;
+    return 0;
+}
+static int sys_midi_send(struct cvm_image *img, int32_t *r, void *ud) {
+    (void)img;
+    ctx_t *x = (ctx_t*)ud;
+    cron_synth_send(x->c->synth, (int)r[0], (int)r[1], (int)r[2]);
+    r[0] = 0;
+    return 0;
+}
+static int sys_midi_reset(struct cvm_image *img, int32_t *r, void *ud) {
+    (void)img;
+    cron_synth_reset(((ctx_t*)ud)->c->synth);
+    r[0] = 0;
+    return 0;
+}
+static int sys_midi_volume(struct cvm_image *img, int32_t *r, void *ud) {
+    (void)img;
+    cron_synth_volume(((ctx_t*)ud)->c->synth, (int)r[0]);
+    r[0] = 0;
+    return 0;
+}
+
 /* ------ input ----------------------------------------------------------- */
 
 static int sys_pad(struct cvm_image *img, int32_t *r, void *ud) {
@@ -585,6 +626,12 @@ static const entry_t kSyscalls[] = {
     { "cvm_sys_cron_mod_stop",     sys_mod_stop     },
     { "cvm_sys_cron_stream",       sys_stream       },
     { "cvm_sys_cron_stream_free",  sys_stream_free  },
+    { "cvm_sys_cron_sf2_load",       sys_sf2_load       },
+    { "cvm_sys_cron_sf2_free",       sys_sf2_free       },
+    { "cvm_sys_cron_midi_soundfont", sys_midi_soundfont },
+    { "cvm_sys_cron_midi_send",      sys_midi_send      },
+    { "cvm_sys_cron_midi_reset",     sys_midi_reset     },
+    { "cvm_sys_cron_midi_volume",    sys_midi_volume    },
     /* input */
     { "cvm_sys_cron_pad",          sys_pad          },
     { "cvm_sys_cron_pad_pressed",  sys_pad_pressed  },
