@@ -124,14 +124,6 @@ void cronopio_console_mix(cronopio_console_t* c, int16_t* dst, int frames) {
     if (c->synth) cron_synth_render(c->synth, synth_buf, synth_frames);
 
     for (int i = 0; i < frames; ++i) {
-        /* Advance the MOD player at its tick rate. */
-        if (c->mod.playing) {
-            if (--c->mod.sample_counter <= 0) {
-                cron_mod_tick(c);
-                c->mod.sample_counter = c->mod.samples_per_tick;
-            }
-        }
-
         int32_t mix_l = 0, mix_r = 0;
         for (int vi = 0; vi < CRONOPIO_AUDIO_CHANS; ++vi) {
             cron_voice_t* voice = &c->voices[vi];

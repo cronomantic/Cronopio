@@ -4,7 +4,6 @@ add_library(cronopio_common STATIC
     common/gpu.c
     common/poly.c
     common/apu.c
-    common/mod.c
     common/midisynth.c
     common/bios_sf2.c
     common/input.c

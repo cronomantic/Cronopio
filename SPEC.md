@@ -101,7 +101,7 @@ cvm-cc ... --rom=doom1.wad game.c -o doomopio.bin
 | Sample rate     | 22 050 Hz                                                   |
 | Output          | 16-bit signed stereo, mixed by host                         |
 | Per-voice       | synth wave (sine/square/triangle/pulse/noise) **or** 8-bit PCM sample, with ADSR envelope, pitch, volume, pan |
-| Music           | host MIDI + SoundFont synth (TinySoundFont) with a default GM "BIOS" bank + cart-loadable `.sf2`; plus a ProTracker MOD player and a self-rendered PCM stream ring |
+| Music           | host MIDI + SoundFont synth (TinySoundFont) with a default GM "BIOS" bank + cart-loadable `.sf2`; plus a self-rendered PCM stream ring |
 
 The host provides the voices (a software mixer) plus a data-driven
 sequencer; the cart supplies samples / sounds / music and triggers

@@ -455,20 +455,6 @@ static int sys_note_off(struct cvm_image *img, int32_t *r, void *ud) {
     r[0] = 0;
     return 0;
 }
-static int sys_mod_play(struct cvm_image *img, int32_t *r, void *ud) {
-    ctx_t *x = (ctx_t*)ud;
-    uint32_t off = (uint32_t)r[0], len = (uint32_t)r[1];
-    if ((uint64_t)off + len > img->mem_size) { r[0] = -1; return 0; }
-    r[0] = cron_mod_play(x->c, off, len, (int)r[2]);
-    return 0;
-}
-static int sys_mod_stop(struct cvm_image *img, int32_t *r, void *ud) {
-    (void)img;
-    cron_mod_stop(((ctx_t*)ud)->c);
-    r[0] = 0;
-    return 0;
-}
-
 static int sys_snd_master(struct cvm_image *img, int32_t *r, void *ud) {
     (void)img;
     ctx_t *x = (ctx_t*)ud;
@@ -622,8 +608,6 @@ static const entry_t kSyscalls[] = {
     { "cvm_sys_cron_pcm",          sys_pcm          },
     { "cvm_sys_cron_env",          sys_env          },
     { "cvm_sys_cron_note_off",     sys_note_off     },
-    { "cvm_sys_cron_mod_play",     sys_mod_play     },
-    { "cvm_sys_cron_mod_stop",     sys_mod_stop     },
     { "cvm_sys_cron_stream",       sys_stream       },
     { "cvm_sys_cron_stream_free",  sys_stream_free  },
     { "cvm_sys_cron_sf2_load",       sys_sf2_load       },

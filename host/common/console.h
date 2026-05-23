@@ -61,10 +61,9 @@ typedef struct {
     uint32_t freq_mhz;
     uint32_t phase;
 
-    /* pcm: a direct descriptor into cart memory (heap offsets, in samples),
-     * so the MOD player can point a voice at an arbitrary sample with a
-     * sub-region sustain loop. pcm_pos/step are Q16.16. pcm_looplen==0 means
-     * one-shot (stop at pcm_len); >0 loops [pcm_loopstart, +pcm_looplen). */
+    /* pcm: a direct descriptor into cart memory (heap offsets, in samples).
+     * pcm_pos/step are Q16.16. pcm_looplen==0 means one-shot (stop at pcm_len);
+     * >0 loops [pcm_loopstart, +pcm_looplen). */
     uint32_t pcm_off;
     uint32_t pcm_len;
     uint32_t pcm_loopstart;
@@ -97,45 +96,6 @@ typedef struct {
  * output rate. The cart renders music (e.g. a DOOM MUS via its own OPL
  * emulator) and pushes frames; the mixer drains and adds them. */
 #define CRONOPIO_STREAM_FRAMES  8192
-
-#define CRONOPIO_MOD_MAXCHAN  8
-#define CRONOPIO_MOD_SAMPLES  31
-
-/* Host-side ProTracker MOD player. Parses a .mod blob living in cart memory
- * (RAM or ROM) and drives voices 0..n_channels-1; SFX use the rest. */
-typedef struct {
-    int      playing;
-    int      loop_song;
-
-    /* parsed from the .mod (heap offsets are absolute into the cart heap) */
-    int      n_channels;
-    int      song_len;
-    uint8_t  order[128];
-    uint32_t pattern_off;                       /* pattern data */
-    uint32_t smp_off[CRONOPIO_MOD_SAMPLES];     /* sample PCM */
-    uint32_t smp_len[CRONOPIO_MOD_SAMPLES];
-    uint32_t smp_loopstart[CRONOPIO_MOD_SAMPLES];
-    uint32_t smp_looplen[CRONOPIO_MOD_SAMPLES];
-    uint8_t  smp_vol[CRONOPIO_MOD_SAMPLES];     /* 0..64 */
-
-    /* playback position */
-    int      pos;            /* order index */
-    int      row;            /* 0..63 */
-    int      speed;          /* ticks per row (default 6) */
-    int      bpm;            /* default 125 */
-    int      tick;           /* current tick within the row */
-    int      samples_per_tick;
-    int      sample_counter; /* output samples until the next tick */
-    int      pat_break;      /* pending row break (-1 none) */
-    int      pos_jump;       /* pending order jump (-1 none) */
-
-    /* per-channel running state */
-    int      ch_sample[CRONOPIO_MOD_MAXCHAN];
-    int      ch_period[CRONOPIO_MOD_MAXCHAN];
-    int      ch_vol[CRONOPIO_MOD_MAXCHAN];      /* 0..64 */
-    uint8_t  ch_fx[CRONOPIO_MOD_MAXCHAN];
-    uint8_t  ch_fxp[CRONOPIO_MOD_MAXCHAN];
-} cron_mod_t;
 
 /* Global drawing state — clip rect, camera offset, draw-time palette remap.
  * Every primitive routes pixel writes through these (Pyxel-style). */
@@ -191,7 +151,6 @@ typedef struct {
     cron_voice_t       voices[CRONOPIO_AUDIO_CHANS];
     cron_sample_bank_t samples[CRONOPIO_SAMPLE_SLOTS];
     int                master_vol_q8;            /* 0..256 */
-    cron_mod_t         mod;                       /* host-side MOD player */
     void*              synth;                     /* MIDI+SoundFont synth (midisynth.c, opaque cron_synth*) */
 
     /* Streaming PCM ring (16-bit stereo). head written by the cart thread
@@ -268,14 +227,6 @@ void     cron_apu_pcm    (cronopio_console_t* c, int v, int slot,
 void     cron_apu_env    (cronopio_console_t* c, int v, int attack_ms,
                           int decay_ms, int sustain, int release_ms);
 void     cron_apu_note_off(cronopio_console_t* c, int v);
-
-/* MOD player. cron_mod_play parses the .mod blob at heap offset `off`
- * (len bytes) and starts it on voices 0..n_channels-1; returns 0 on success,
- * -1 if the blob isn't a recognised MOD. cron_mod_tick advances one tick and
- * is called by the mixer. */
-int      cron_mod_play(cronopio_console_t* c, uint32_t off, uint32_t len, int loop);
-void     cron_mod_stop(cronopio_console_t* c);
-void     cron_mod_tick(cronopio_console_t* c);
 
 /* MIDI + SoundFont synth (midisynth.c). The handle is an opaque cron_synth*
  * stored in cronopio_console_t::synth. _load_default and _load_mem touch tsf

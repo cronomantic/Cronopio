@@ -28,7 +28,7 @@ the hood it drives `cvm-cc`, the generic CronoVM compiler.)
 #include <cronopio.h>
 
 static void setup(void) {          /* runs once at boot */
-    /* ... load resources: cron_image / cron_sample / cron_mod_play ... */
+    /* ... load resources: cron_image / cron_sample / cron_sf2_load ... */
 }
 
 static void frame(void) {          /* called every 1/60 s */
@@ -84,8 +84,9 @@ bitmasks (`CRON_BTN_UP…CRON_BTN_Y`). `cron_key(scancode)` and
 - SFX: `cron_snd_tone(v, wave, freq_mhz, vol, pan)` for synth, or
   `cron_sample`/`cron_sample_u8` + `cron_pcm(v, slot, pitch, vol, pan, loop)`
   for PCM. `cron_env` adds an ADSR envelope.
-- Music: a ProTracker module — `cron_mod_play(mod, len, loop)`. Or render
-  your own and push it with `cron_stream`. See [`audio.md`](audio.md).
+- Music: MIDI through the host SoundFont synth — `cron_midi_send(...)` (and
+  optionally `cron_sf2_load` for a custom bank). Or render your own PCM and push
+  it with `cron_stream`. See [`audio.md`](audio.md).
 
 ## 3D
 

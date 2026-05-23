@@ -115,8 +115,6 @@ extern int32_t  cvm_sys_cron_stream_free  (void);
 extern void     cvm_sys_cron_pcm         (int32_t voice, int32_t sample, int32_t pitch_q16, int32_t vol, int32_t pan, int32_t loop);
 extern void     cvm_sys_cron_env         (int32_t voice, int32_t attack_ms, int32_t decay_ms, int32_t sustain, int32_t release_ms);
 extern void     cvm_sys_cron_note_off    (int32_t voice);
-extern int32_t  cvm_sys_cron_mod_play     (const void* mod, int32_t len, int32_t loop);
-extern void     cvm_sys_cron_mod_stop     (void);
 extern int32_t  cvm_sys_cron_sf2_load       (const void* sf2, int32_t len);
 extern void     cvm_sys_cron_sf2_free       (int32_t handle);
 extern void     cvm_sys_cron_midi_soundfont (int32_t handle);
@@ -200,10 +198,6 @@ static inline void     cron_pcm         (int32_t v, int32_t s, int32_t pitch_q16
 /* ADSR envelope (ms; sustain 0..255) applied to the next trigger on voice v. */
 static inline void     cron_env         (int32_t v, int32_t a_ms, int32_t d_ms, int32_t sustain, int32_t r_ms) { cvm_sys_cron_env(v, a_ms, d_ms, sustain, r_ms); }
 static inline void     cron_note_off    (int32_t v)                       { cvm_sys_cron_note_off(v); }
-/* Play a ProTracker .mod (in RAM or cart ROM) on voices 0..n_channels-1.
- * Returns 0 on success, -1 if not a recognised MOD. */
-static inline int32_t  cron_mod_play     (const void* mod, int32_t len, int32_t loop) { return cvm_sys_cron_mod_play(mod, len, loop); }
-static inline void     cron_mod_stop     (void)                           { cvm_sys_cron_mod_stop(); }
 
 /* Streaming PCM: push `nframes` 16-bit signed *stereo* frames (interleaved
  * L,R) into the host's playback ring; returns frames actually queued.

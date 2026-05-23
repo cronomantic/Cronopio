@@ -84,12 +84,10 @@ future ABI lets carts flush mid-frame.
 | `cvm_sys_cron_env`         | `void(i32 v, i32 attack_ms, i32 decay_ms, i32 sustain, i32 release_ms)` | ADSR for the next trigger on v          |
 | `cvm_sys_cron_note_off`    | `void(i32 v)`                                                   | Enter the envelope release stage               |
 
-### Music (MOD) & streaming
+### Streaming PCM
 
 | Name                       | Signature                                       | Notes                                          |
 |----------------------------|-------------------------------------------------|------------------------------------------------|
-| `cvm_sys_cron_mod_play`    | `i32(const void* mod, i32 len, i32 loop)`       | Play a ProTracker .mod (in RAM/ROM) on voices 0..n_channels-1; returns 0/-1 |
-| `cvm_sys_cron_mod_stop`    | `void()`                                        | Stop the module                                |
 | `cvm_sys_cron_stream`      | `i32(const i16* frames, i32 nframes)`           | Queue 16-bit stereo frames into the playback ring; returns queued |
 | `cvm_sys_cron_stream_free` | `i32()`                                         | Frames the stream ring can accept now          |
 

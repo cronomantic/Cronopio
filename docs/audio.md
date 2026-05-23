@@ -50,33 +50,10 @@ SFX are triggered directly on a free voice: `cron_pcm` for a one-shot PCM
 sample (explosions, voice, percussion — what DOOM's SFX are) and
 `cron_snd_tone` + `cron_env` for synth blips. No separate sound-data format
 is needed; the voice layer is the SFX layer. (A Pyxel-style step sequencer
-for synth "sounds" could be added later, but music is the bigger need and is
-covered by MOD below.)
+for synth "sounds" could be added later, but music is covered by the MIDI +
+SoundFont engine below.)
 
-## Layer 3 — music: MOD playback
-
-Music is a **ProTracker `.mod`** file, played by a host-side player that
-parses the blob (in cart RAM or ROM) and drives voices 0..n_channels-1.
-MOD samples are 8-bit signed mono — exactly the voice PCM format — so the
-player just points voices at the sample bytes inside the blob and steps by
-the Amiga period. SFX use the voices above the module's channel count.
-
-| Name              | Signature                                        | Notes |
-|-------------------|--------------------------------------------------|-------|
-| `cron_mod_play`   | `i32(const void* mod, i32 len, i32 loop)`        | Parse + start a .mod; returns 0 / -1 (not a MOD). Uses voices 0..n_channels-1. |
-| `cron_mod_stop`   | `void()`                                         | Stop and fade the module's voices. |
-
-Supported: 4/6/8-channel modules, sample sustain loops, and the common
-effects `Cxx` (set volume), `Fxx` (speed/tempo), `Bxx` (position jump),
-`Dxx` (pattern break), `9xx` (sample offset), `Axy` (volume slide). Other
-effects are ignored for now (the note still plays).
-
-> **Status note:** MOD is now considered the same *category* as the MIDI +
-> SoundFont engine below (a sequence driving a sample bank) and is **demoted**:
-> for the 90s-console identity, MIDI + SoundFont is the primary music path. MOD
-> stays for now but may be retired/reimplemented as a frontend over the synth.
-
-## Layer 4 — music: MIDI + SoundFont (the primary engine)
+## Layer 3 — music: MIDI + SoundFont (the music engine)
 
 The native music model for a 90s-class console: a **MIDI sequence over a
 sample bank** (the PSX VAB / AWE32 model). The host owns a **MIDI + SoundFont
@@ -114,8 +91,7 @@ ADSR envelopes, GM presets) is faithful enough for game music.
 ## Syscall range
 
 `0x200–0x2FF` — extended audio. `0x200` block = Layer 1 (samples + voices)
-and SFX triggers; `0x220` block = MOD music; `0x240` block = MIDI + SoundFont
-synth (Layer 4).
+and SFX triggers; `0x240` block = MIDI + SoundFont synth (Layer 3).
 
 ## DOOM audio
 
@@ -123,11 +99,11 @@ synth (Layer 4).
   registers each lump straight from the WAD in cart ROM with `cron_sample_u8`
   (no copy/convert), then plays it with `cron_pcm(voice, sample, pitch, vol,
   pan, 0)` — vol/pan from DOOM's distance/angle, optional pitch wobble. It
-  manages ~8 voices with DOOM's priority/cutoff logic; SFX use voices above
-  the MOD channel count (or any free voices if no MOD is playing).
+  manages ~8 voices with DOOM's priority/cutoff logic (any free voices, since
+  music is on the synth, not the voices).
 - **Music** is MUS (a MIDI variant) — note events, no sound. The port converts
   MUS→MIDI in the cart (`mus2mid`/`midifile`, already in the tree) and feeds the
-  events to the host MIDI + SoundFont synth (Layer 4) via `cron_midi_send`,
+  events to the host MIDI + SoundFont synth (Layer 3) via `cron_midi_send`,
   played against the default GM bank (or a cart-supplied `.sf2`). This matches
   the 90s-console identity — sampled GM, not the "tinny" OPL/Adlib sound — and
   costs almost nothing on the VM. (OPL/Adlib was considered and dropped to avoid
@@ -136,7 +112,7 @@ synth (Layer 4).
 ## Status
 
 Implemented: Layer 1 voices (synth + PCM + ADSR, sample banks), SFX as direct
-triggers, the MOD player (Layer 3), and the **MIDI + SoundFont synth (Layer 4)**
+triggers, and the **MIDI + SoundFont synth (Layer 3)**
 with a default GM "BIOS" bank and cart-loadable `.sf2`. The DOOM port uses all
 of it: music via MUS→MIDI→`cron_midi_send` (host synth), SFX via DMX `DS*` →
 `cron_sample_u8`+`cron_pcm` — both working. Possible future addition: a
