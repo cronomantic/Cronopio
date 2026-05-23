@@ -20,11 +20,12 @@ void cronopio_console_init(cronopio_console_t* c) {
     c->frame_fn_index  = -1;
     cron_gpu_reset_state(c);   /* clip=full screen, camera=0, pal=identity */
 
-    /* Bring up the MIDI+SoundFont synth. Loading the default (BIOS) bank is the
-     * platform shell's job (cron_synth_load_default) — the console stays
-     * target-agnostic about where assets live (file, fetch, flash...). MIDI
-     * music is silent until a font is loaded. */
+    /* Bring up the MIDI+SoundFont synth and load the default (BIOS) GM bank,
+     * which is embedded straight into the binary (bios_sf2.c) so the executable
+     * is self-contained — no asset file. A cart may override it via cron_sf2_load. */
     c->synth = cron_synth_create();
+    if (c->synth && cron_bios_sf2_len > 0)
+        cron_synth_load_default_mem(c->synth, cron_bios_sf2, (int)cron_bios_sf2_len);
 }
 
 void cronopio_console_begin_frame(cronopio_console_t* c) {

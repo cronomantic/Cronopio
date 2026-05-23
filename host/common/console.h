@@ -2,6 +2,7 @@
 #define CRONOPIO_CONSOLE_H
 
 #include <stdint.h>
+#include <stddef.h>
 
 #define CRONOPIO_SCREEN_W      320
 #define CRONOPIO_SCREEN_H      240
@@ -283,7 +284,7 @@ void     cron_mod_tick(cronopio_console_t* c);
  * ring the mixer drains in cron_synth_render. */
 void*    cron_synth_create(void);
 void     cron_synth_destroy(void* synth);
-int      cron_synth_load_default(void* synth, const char* path);   /* slot 0 (BIOS); 0/-1 */
+int      cron_synth_load_default_mem(void* synth, const void* sf2, int len); /* slot 0 (BIOS); 0/-1 */
 int      cron_synth_load_mem(void* synth, const void* sf2, int len);/* cart: -> slot>=1 or -1 */
 void     cron_synth_free_slot(void* synth, int slot);
 void     cron_synth_select(void* synth, int slot);                 /* 0 = default bank */
@@ -291,6 +292,11 @@ void     cron_synth_send(void* synth, int status, int d1, int d2); /* one MIDI m
 void     cron_synth_reset(void* synth);                            /* all notes off */
 void     cron_synth_volume(void* synth, int vol);                  /* music master 0..255 */
 void     cron_synth_render(void* synth, int16_t* out, int frames); /* audio thread */
+
+/* The default GM "BIOS" SoundFont, embedded into the binary (bios_sf2.c via
+ * C23 #embed) so the executable is self-contained. console_init loads it. */
+extern const unsigned char cron_bios_sf2[];
+extern const size_t        cron_bios_sf2_len;
 
 void     cron_input_set_pad     (cronopio_console_t* c, int player, uint32_t mask);
 uint32_t cron_input_pad         (const cronopio_console_t* c, int player);

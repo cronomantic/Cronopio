@@ -11,17 +11,23 @@ if(NOT SDL2_FOUND)
 endif()
 
 add_executable(cronopio main.c)
-# SDL2main must precede SDL2 on the link line: on Windows it provides
-# WinMain (which calls our main) and references SDL_* symbols that the
-# SDL2 library after it resolves. Listing SDL2main last leaves those
-# references undefined.
-target_link_libraries(cronopio PRIVATE cronopio_common SDL2::SDL2main SDL2::SDL2)
 
-# Dev fallback: point at the in-tree default SoundFont so the host finds it
-# when run straight from the build tree (the distribution ships it beside the
-# exe instead). CMAKE_SOURCE_DIR is the Cronopio repo root.
-target_compile_definitions(cronopio PRIVATE
-    CRONOPIO_SOURCE_SF2="${CMAKE_SOURCE_DIR}/assets/bios/GeneralUser-GS.sf2")
+# Self-contained executable: link SDL2 statically so no SDL2.dll is needed.
+# (This LLVM-mingw/UCRT toolchain already links libgcc/libc++/winpthread
+# statically by default, and the api-ms-win-crt-* imports are the system UCRT,
+# present on Windows — so static SDL2 is the only piece left to drop the DLL.)
+# SDL2::SDL2-static carries its transitive Win32 system libs. Fall back to the
+# shared target where a static SDL2 isn't installed.
+if(TARGET SDL2::SDL2-static)
+    set(CRONOPIO_SDL2_LIB SDL2::SDL2-static)
+else()
+    set(CRONOPIO_SDL2_LIB SDL2::SDL2)
+    message(WARNING "SDL2::SDL2-static not found — linking SDL2 dynamically "
+                    "(cronopio.exe will need SDL2.dll beside it).")
+endif()
+# SDL2main must precede SDL2 on the link line: on Windows it provides WinMain
+# (which calls our main) and references SDL_* symbols the SDL2 library resolves.
+target_link_libraries(cronopio PRIVATE cronopio_common SDL2::SDL2main ${CRONOPIO_SDL2_LIB})
 
 if(CRONOPIO_INSTALL)
     include(GNUInstallDirs)

@@ -86,11 +86,11 @@ DOOM's MUS→MIDI) and pushes MIDI messages. Synthesis is host-native, so VM cos
 is negligible — the same reason the rasteriser is offloaded to GPU primitives.
 
 The console ships a **default General MIDI SoundFont** (handle 0, "BIOS"):
-`GeneralUser GS`, loaded at init from `GeneralUser-GS.sf2` beside the executable
-(like `SDL2.dll`). A missing file is non-fatal — music is silent until a cart
-loads its own bank. A cart may load its own `.sf2` from RAM/ROM with
-`cron_sf2_load` (→ handle ≥1) and select it with `cron_midi_soundfont`; ROM
-cost is then the programmer's choice.
+`GeneralUser GS`, **embedded straight into the binary** (C23 `#embed`, see
+`host/common/bios_sf2.c`) so the executable is self-contained — no external
+asset file. `console_init` loads it into slot 0. A cart may load its own `.sf2`
+from RAM/ROM with `cron_sf2_load` (→ handle ≥1) and select it with
+`cron_midi_soundfont`; ROM cost is then the programmer's choice.
 
 | Name                 | Signature                                  | Notes |
 |----------------------|--------------------------------------------|-------|

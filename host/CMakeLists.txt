@@ -6,9 +6,13 @@ add_library(cronopio_common STATIC
     common/apu.c
     common/mod.c
     common/midisynth.c
+    common/bios_sf2.c
     common/input.c
 )
 target_include_directories(cronopio_common PUBLIC common)
+
+# bios_sf2.c embeds the default SoundFont with C23 #embed — needs C23.
+set_source_files_properties(common/bios_sf2.c PROPERTIES COMPILE_OPTIONS "-std=gnu23")
 
 # TinySoundFont (vendored as a submodule under external/), the MIDI+SoundFont
 # music synth used by common/midisynth.c.

@@ -147,12 +147,13 @@ void cron_synth_destroy(void* sp) {
     free(s);
 }
 
-/* Load the default (BIOS) SoundFont into slot 0 from a file. Called at init,
+/* Load the default (BIOS) SoundFont into slot 0 from an in-memory blob (the
+ * font is embedded in the binary — see bios_sf2.c). Called at console init,
  * before the audio thread runs, so it can touch tsf directly. Returns 0/-1. */
-int cron_synth_load_default(void* sp, const char* path) {
+int cron_synth_load_default_mem(void* sp, const void* sf2, int len) {
     cron_synth* s = (cron_synth*)sp;
-    if (!s) return -1;
-    tsf* f = tsf_load_filename(path);
+    if (!s || !sf2 || len <= 0) return -1;
+    tsf* f = tsf_load_memory(sf2, len);
     if (!f) return -1;
     if (s->fonts[0]) tsf_close(s->fonts[0]);
     s->fonts[0] = f;
