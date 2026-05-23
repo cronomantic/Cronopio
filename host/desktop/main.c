@@ -5,14 +5,20 @@
  *   3. Run the cart's entry once (it registers a frame fn via cron_set_frame).
  *   4. Each 1/60 s: poll input, cvm_call the frame fn, blit FB, mix audio.
  *
- * The per-frame work lives in frame_step() so both the native blocking
- * loop and Emscripten's requestAnimationFrame-driven callback can share it.
- * Under Emscripten there is no blocking main loop — emscripten_set_main_loop
- * calls frame_step() once per browser animation frame. */
+ * On top of that bare runner sits a small in-app SYSTEM MENU (menu.c, toggled
+ * with F1): load another cartridge, reset, rebind the pad to the keyboard, and
+ * map a host game controller. While the menu is open the cart is paused
+ * (its last frame stays on screen) and audio is silenced. Pad bindings and the
+ * controller choice persist in cronopio.cfg next to the executable.
+ *
+ * The per-frame work lives in tick() so both the native blocking loop and
+ * Emscripten's requestAnimationFrame-driven callback can share it. */
 
 #include "console.h"
 #include "syscalls.h"
 #include "cvm.h"
+#include "hostcfg.h"
+#include "menu.h"
 
 #include <SDL.h>
 #include <stdio.h>
@@ -31,28 +37,87 @@ uint64_t cronopio_platform_ticks_ms(void) {
     return (uint64_t)SDL_GetTicks();
 }
 
-/* Everything the per-frame step needs. Lives on main()'s stack; a pointer
- * is handed to the loop driver. */
+/* Everything the per-frame step and the system menu need. Lives in a single
+ * static instance; a pointer is handed to the loop driver and menu callbacks. */
 typedef struct {
     cronopio_console_t *console;
-    struct cvm_image   *img;
+    struct cvm_image    img;          /* current cart image */
+    uint8_t            *blob;         /* current cart bytes (owned) */
+    char                cart_path[1024];
+    int                 has_cart;
+
     SDL_Renderer       *ren;
     SDL_Texture        *tex;
     uint32_t           *rgba;
+    SDL_AudioDeviceID   audio_dev;
+
+    SDL_GameController *gc;            /* opened host controller, or NULL */
+    char                joy_name[128];
+
+    host_cfg_t          cfg;
+    char                cfg_path[1024];
+    menu_t             *menu;
+
     int                 running;
 } app_t;
 
-static uint32_t map_keys_to_pad(const Uint8* keys) {
+/* ---- input: build the 8-button pad from the configured keyboard + pad ---- */
+
+static uint32_t build_pad(app_t* a, const Uint8* keys) {
     uint32_t m = 0;
-    if (keys[SDL_SCANCODE_UP]    || keys[SDL_SCANCODE_W]) m |= 1u << 0;
-    if (keys[SDL_SCANCODE_DOWN]  || keys[SDL_SCANCODE_S]) m |= 1u << 1;
-    if (keys[SDL_SCANCODE_LEFT]  || keys[SDL_SCANCODE_A]) m |= 1u << 2;
-    if (keys[SDL_SCANCODE_RIGHT] || keys[SDL_SCANCODE_D]) m |= 1u << 3;
-    if (keys[SDL_SCANCODE_Z]     || keys[SDL_SCANCODE_J]) m |= 1u << 4; /* A */
-    if (keys[SDL_SCANCODE_X]     || keys[SDL_SCANCODE_K]) m |= 1u << 5; /* B */
-    if (keys[SDL_SCANCODE_C]     || keys[SDL_SCANCODE_L]) m |= 1u << 6; /* X */
-    if (keys[SDL_SCANCODE_V]     || keys[SDL_SCANCODE_I]) m |= 1u << 7; /* Y */
+    for (int b = 0; b < PAD_BTN_COUNT; ++b) {
+        SDL_Scancode sc = a->cfg.key[b];
+        if (sc != SDL_SCANCODE_UNKNOWN && keys[sc]) m |= (1u << b);
+    }
+    if (a->gc) {
+        for (int b = 0; b < PAD_BTN_COUNT; ++b) {
+            SDL_GameControllerButton gb = a->cfg.gbtn[b];
+            if (gb != SDL_CONTROLLER_BUTTON_INVALID &&
+                SDL_GameControllerGetButton(a->gc, gb)) m |= (1u << b);
+        }
+        /* Left analog stick also drives the d-pad (fixed deadzone). */
+        const int dz = 16000;
+        Sint16 ax = SDL_GameControllerGetAxis(a->gc, SDL_CONTROLLER_AXIS_LEFTX);
+        Sint16 ay = SDL_GameControllerGetAxis(a->gc, SDL_CONTROLLER_AXIS_LEFTY);
+        if (ax < -dz) m |= (1u << PAD_LEFT);
+        if (ax >  dz) m |= (1u << PAD_RIGHT);
+        if (ay < -dz) m |= (1u << PAD_UP);
+        if (ay >  dz) m |= (1u << PAD_DOWN);
+    }
     return m;
+}
+
+/* ---- controller (re)discovery ----------------------------------------- */
+
+static void close_controller(app_t* a) {
+    if (a->gc) { SDL_GameControllerClose(a->gc); a->gc = NULL; }
+    a->joy_name[0] = '\0';
+}
+
+/* Open the configured controller (by GUID) or the first available one. */
+static void open_controller(app_t* a) {
+    close_controller(a);
+    int n = SDL_NumJoysticks(), chosen = -1;
+    for (int i = 0; i < n; ++i) {
+        if (!SDL_IsGameController(i)) continue;
+        if (a->cfg.joy_guid[0]) {
+            char g[40];
+            SDL_JoystickGetGUIDString(SDL_JoystickGetDeviceGUID(i), g, sizeof(g));
+            if (!strcmp(g, a->cfg.joy_guid)) { chosen = i; break; }
+        }
+        if (chosen < 0) chosen = i;            /* first controller as fallback */
+    }
+    if (chosen >= 0) {
+        a->gc = SDL_GameControllerOpen(chosen);
+        if (a->gc) {
+            const char* nm = SDL_GameControllerName(a->gc);
+            snprintf(a->joy_name, sizeof(a->joy_name), "%s", nm ? nm : "Controller");
+            SDL_Joystick* js = SDL_GameControllerGetJoystick(a->gc);
+            SDL_JoystickGetGUIDString(SDL_JoystickGetGUID(js),
+                                      a->cfg.joy_guid, sizeof(a->cfg.joy_guid));
+        }
+    }
+    if (a->menu) menu_set_joy_name(a->menu, a->gc ? a->joy_name : NULL);
 }
 
 static void audio_cb(void* userdata, Uint8* stream, int len) {
@@ -74,46 +139,110 @@ static uint8_t* slurp(const char* path, size_t* out_len) {
     return buf;
 }
 
-/* Blit the cart framebuffer to the window and present. */
-static void desktop_present(app_t* a) {
-    cronopio_console_blit_rgba(a->console, a->img->heap, a->rgba);
+/* Compose the current scene: cart texture + (optional) menu overlay. */
+static void present_all(app_t* a) {
+    SDL_RenderClear(a->ren);
+    SDL_RenderCopy(a->ren, a->tex, NULL, NULL);
+    if (menu_is_open(a->menu)) menu_render(a->menu);
+    SDL_RenderPresent(a->ren);
+}
+
+/* Refresh the cart texture from the framebuffer region. */
+static void refresh_tex(app_t* a) {
+    cronopio_console_blit_rgba(a->console, a->img.heap, a->rgba);
     SDL_UpdateTexture(a->tex, NULL, a->rgba, CRONOPIO_SCREEN_W * 4);
+}
+
+/* Full standalone present (no menu) — used as the cron_present hook so a cart's
+ * loading screen drawn during its blocking entry actually reaches the window. */
+static void desktop_present_cb(void* ud) {
+    app_t* a = (app_t*)ud;
+    refresh_tex(a);
     SDL_RenderClear(a->ren);
     SDL_RenderCopy(a->ren, a->tex, NULL, NULL);
     SDL_RenderPresent(a->ren);
 }
-/* present hook for cron_present (e.g. a loading screen drawn while the cart's
- * blocking entry runs, before the frame loop starts). */
-static void desktop_present_cb(void* ud) { desktop_present((app_t*)ud); }
 
-/* One frame: poll input, run the cart's frame fn, blit, present. Called by
- * the native while-loop and by emscripten_set_main_loop. */
-static void frame_step(void* arg) {
-    app_t* a = (app_t*)arg;
-    cronopio_console_t* console = a->console;
+/* ---- cart load / reset (also the menu's load_cart/reset_cart callbacks) -- */
 
-    SDL_Event ev;
-    while (SDL_PollEvent(&ev)) {
-        if (ev.type == SDL_QUIT) a->running = 0;
-        if (ev.type == SDL_KEYDOWN && ev.key.keysym.sym == SDLK_ESCAPE) a->running = 0;
-        if (ev.type == SDL_MOUSEMOTION) {
-            console->mouse_x = ev.motion.x / SCALE;
-            console->mouse_y = ev.motion.y / SCALE;
-        }
-        if (ev.type == SDL_MOUSEBUTTONDOWN || ev.type == SDL_MOUSEBUTTONUP) {
-            uint32_t bit = (ev.button.button == SDL_BUTTON_LEFT) ? 1u : 2u;
-            if (ev.type == SDL_MOUSEBUTTONDOWN) console->mouse_buttons |=  bit;
-            else                                console->mouse_buttons &= ~bit;
-        }
+/* Load the cart at `path`, swapping out any current one. Returns 0 on success;
+ * on failure the running cart (if any) is left untouched. Safe to call while
+ * audio is live: the swap happens under the audio lock. */
+static int app_load_cart(void* ud, const char* path) {
+    app_t* a = (app_t*)ud;
+
+    size_t   nlen = 0;
+    uint8_t* nblob = slurp(path, &nlen);
+    if (!nblob) return -1;
+
+    struct cvm_image nimg;
+    int rc = cvm_load(nblob, nlen, &nimg);
+    if (rc != CVM_OK) {
+        fprintf(stderr, "cvm_load(%s): %s\n", path, cvm_strerror(rc));
+        free(nblob);
+        return -1;
     }
+
+    /* Stop the audio thread touching the console while we tear it down. */
+    if (a->audio_dev) SDL_LockAudioDevice(a->audio_dev);
+
+    if (a->has_cart) {
+        cvm_image_free(&a->img);
+        free(a->blob);
+    }
+    /* Full console reset: drop the old synth, re-init (reloads the BIOS SF2),
+     * then re-establish the host hooks console_init clears. */
+    cron_synth_destroy(a->console->synth);
+    cronopio_console_init(a->console);
+    a->console->boot_ms    = SDL_GetTicks();
+    a->console->present_cb = desktop_present_cb;
+    a->console->present_ud = a;
+
+    a->img      = nimg;
+    a->blob     = nblob;
+    a->has_cart = 1;
+    snprintf(a->cart_path, sizeof(a->cart_path), "%s", path);
+
+    if (cronopio_resolve_video_regions(&a->img, a->console) != 0)
+        fprintf(stderr, "warning: cart declares no 'fb'/'pal' — drawing no-ops.\n");
+    cronopio_syscalls_install(&a->img, a->console);
+
+    if (a->audio_dev) SDL_UnlockAudioDevice(a->audio_dev);
+
+    /* Run the cart's entry (registers the frame fn; a DOOM cart blocks here for
+     * seconds loading the WAD, painting a loading screen via cron_present). */
+    int32_t entry_ret = 0;
+    rc = cvm_run(&a->img, &entry_ret);
+    if (rc != CVM_OK && rc != CVM_E_SYSCALL_TRAP) {
+        fprintf(stderr, "cart entry trapped: %s\n", cvm_strerror(rc));
+        return -1;
+    }
+    refresh_tex(a);
+    return 0;
+}
+
+static void app_reset_cart(void* ud) {
+    app_t* a = (app_t*)ud;
+    if (a->has_cart) {
+        char path[1024];
+        snprintf(path, sizeof(path), "%s", a->cart_path);
+        app_load_cart(a, path);
+    }
+}
+
+static void app_quit(void* ud) { ((app_t*)ud)->running = 0; }
+
+/* ---- the per-frame step ------------------------------------------------ */
+
+static void run_cart_frame(app_t* a) {
+    cronopio_console_t* console = a->console;
 
     cronopio_console_begin_frame(console);
     const Uint8* keys = SDL_GetKeyboardState(NULL);
-    console->pad_cur[0] = map_keys_to_pad(keys);
+    console->pad_cur[0] = build_pad(a, keys);
     /* Snapshot scancodes for cron_key (low 256 cover standard keyboards).
      * SDL scancodes are USB HID Keyboard usage IDs, which is exactly the
-     * CRON_KEY_* space cron_key() expects — so the snapshot is a direct copy,
-     * no translation. Keep it that way: carts index this bitmap by HID code. */
+     * CRON_KEY_* space cron_key() expects — direct copy, no translation. */
     for (int i = 0; i < 32; ++i) {
         uint8_t byte = 0;
         for (int b = 0; b < 8; ++b)
@@ -123,49 +252,91 @@ static void frame_step(void* arg) {
 
     if (console->frame_fn_index > 0) {
         int32_t fret = 0;
-        int rc = cvm_call(a->img, (uint32_t)console->frame_fn_index, NULL, 0, &fret);
+        int rc = cvm_call(&a->img, (uint32_t)console->frame_fn_index, NULL, 0, &fret);
         if (rc != CVM_OK && rc != CVM_E_SYSCALL_TRAP) {
             fprintf(stderr, "frame trap: %s\n", cvm_strerror(rc));
             a->running = 0;
         }
     }
-
-    desktop_present(a);
-
+    refresh_tex(a);
     cronopio_console_end_frame(console);
+}
+
+/* Directory to seed the file browser with: last used, else the executable's. */
+static const char* browse_dir(app_t* a) {
+    if (a->cfg.last_dir[0]) return a->cfg.last_dir;
+    return ".";
+}
+
+static void toggle_menu(app_t* a) {
+    if (menu_is_open(a->menu)) {
+        if (a->has_cart) menu_close(a->menu);   /* can't resume with no cart */
+    } else {
+        menu_open(a->menu, browse_dir(a), a->gc ? a->joy_name : NULL, a->has_cart);
+    }
+}
+
+static void tick(void* arg) {
+    app_t* a = (app_t*)arg;
+    int was_open = menu_is_open(a->menu);
+
+    SDL_Event ev;
+    while (SDL_PollEvent(&ev)) {
+        if (ev.type == SDL_QUIT) { a->running = 0; continue; }
+
+        if (ev.type == SDL_KEYDOWN && ev.key.keysym.scancode == SDL_SCANCODE_F1
+            && ev.key.repeat == 0) {
+            toggle_menu(a);
+            continue;
+        }
+        if (ev.type == SDL_CONTROLLERDEVICEADDED ||
+            ev.type == SDL_CONTROLLERDEVICEREMOVED) {
+            open_controller(a);
+            continue;
+        }
+
+        if (menu_is_open(a->menu)) {
+            menu_handle_event(a->menu, &ev);   /* modal: it consumes input */
+            continue;
+        }
+
+        /* Cart-running input not covered by the per-frame snapshot. */
+        if (ev.type == SDL_MOUSEMOTION) {
+            a->console->mouse_x = ev.motion.x / SCALE;
+            a->console->mouse_y = ev.motion.y / SCALE;
+        }
+        if (ev.type == SDL_MOUSEBUTTONDOWN || ev.type == SDL_MOUSEBUTTONUP) {
+            uint32_t bit = (ev.button.button == SDL_BUTTON_LEFT) ? 1u : 2u;
+            if (ev.type == SDL_MOUSEBUTTONDOWN) a->console->mouse_buttons |=  bit;
+            else                                a->console->mouse_buttons &= ~bit;
+        }
+    }
+
+    int is_open = menu_is_open(a->menu);
+    /* Silence audio while paused; save config when the menu just closed. */
+    if (a->audio_dev) SDL_PauseAudioDevice(a->audio_dev, is_open ? 1 : 0);
+    if (was_open && !is_open)
+        hostcfg_save(&a->cfg, a->cfg_path);
+
+    if (!is_open && a->has_cart && !a->console->cart_exited)
+        run_cart_frame(a);
+    present_all(a);
 
 #ifdef __EMSCRIPTEN__
-    if (!a->running || console->cart_exited)
+    if (!a->running || a->console->cart_exited)
         emscripten_cancel_main_loop();
 #endif
 }
 
 int main(int argc, char** argv) {
-    if (argc < 2) {
-        fprintf(stderr, "usage: %s cartridge.bin\n", argv[0]);
-        return 1;
-    }
-    const char* cart_path = argv[1];
+    const char* cart_path = (argc >= 2) ? argv[1] : NULL;
 
-    size_t   blob_len = 0;
-    uint8_t* blob     = slurp(cart_path, &blob_len);
-    if (!blob) return 1;
-
-    struct cvm_image img;
-    int rc = cvm_load(blob, blob_len, &img);
-    if (rc != CVM_OK) {
-        fprintf(stderr, "cvm_load: %s\n", cvm_strerror(rc));
-        free(blob);
-        return 1;
-    }
-
-    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO) != 0) {
+    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMECONTROLLER) != 0) {
         fprintf(stderr, "SDL_Init: %s\n", SDL_GetError());
-        cvm_image_free(&img); free(blob);
         return 1;
     }
 
-    SDL_Window*   win = SDL_CreateWindow(
+    SDL_Window* win = SDL_CreateWindow(
         "Cronopio",
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
         CRONOPIO_SCREEN_W * SCALE, CRONOPIO_SCREEN_H * SCALE,
@@ -179,12 +350,26 @@ int main(int argc, char** argv) {
     cronopio_console_init(&console);   /* loads the embedded default SoundFont */
     console.boot_ms = SDL_GetTicks();
 
-    if (cronopio_resolve_video_regions(&img, &console) != 0) {
-        fprintf(stderr,
-                "warning: cart did not declare 'fb' and 'pal' regions — "
-                "drawing syscalls will no-op.\n");
+    static app_t app;
+    app.console  = &console;
+    app.ren      = ren;
+    app.tex      = tex;
+    app.rgba     = (uint32_t*)malloc((size_t)CRONOPIO_FB_BYTES * 4);
+    app.running  = 1;
+    app.has_cart = 0;
+
+    /* Config: defaults, then overlay cronopio.cfg from beside the executable. */
+    hostcfg_defaults(&app.cfg);
+    {
+        char* base = SDL_GetBasePath();
+        snprintf(app.cfg_path, sizeof(app.cfg_path), "%scronopio.cfg",
+                 base ? base : "");
+        hostcfg_load(&app.cfg, app.cfg_path);
+        /* First run: seed the browser at the executable's directory. */
+        if (!app.cfg.last_dir[0] && base)
+            snprintf(app.cfg.last_dir, sizeof(app.cfg.last_dir), "%s", base);
+        if (base) SDL_free(base);
     }
-    cronopio_syscalls_install(&img, &console);
 
     /* Open audio at 22050 Hz stereo, ~1024-frame buffer. */
     SDL_AudioSpec want = {0}, got;
@@ -194,52 +379,43 @@ int main(int argc, char** argv) {
     want.samples  = 1024;
     want.callback = audio_cb;
     want.userdata = &console;
-    SDL_AudioDeviceID dev = SDL_OpenAudioDevice(NULL, 0, &want, &got, 0);
-    if (dev) SDL_PauseAudioDevice(dev, 0);
+    app.audio_dev = SDL_OpenAudioDevice(NULL, 0, &want, &got, 0);
+    if (app.audio_dev) SDL_PauseAudioDevice(app.audio_dev, 0);
 
-    static app_t app;
-    app.console = &console;
-    app.img     = &img;
-    app.ren     = ren;
-    app.tex     = tex;
-    app.rgba    = (uint32_t*)malloc((size_t)CRONOPIO_FB_BYTES * 4);
-    app.running = 1;
+    /* System menu + host controller. */
+    menu_host_t mh = { &app, app_load_cart, app_reset_cart, app_quit };
+    app.menu = menu_create(ren, CRONOPIO_SCREEN_W * SCALE, CRONOPIO_SCREEN_H * SCALE,
+                           &app.cfg, &mh);
+    open_controller(&app);
 
-    /* Let cron_present flush to the window during the cart's (blocking) entry,
-     * so a loading screen drawn while D_DoomMain runs is actually shown. */
+    /* Boot: load the CLI cart if given, else open the file browser. */
     console.present_cb = desktop_present_cb;
     console.present_ud = &app;
-
-    /* Run the cart's entry. It registers a frame fn via cron_set_frame and
-     * returns — but a DOOM cart blocks here for seconds loading the WAD, during
-     * which it paints a loading screen and calls cron_present (the hook above). */
-    int32_t entry_ret = 0;
-    rc = cvm_run(&img, &entry_ret);
-    if (rc != CVM_OK && rc != CVM_E_SYSCALL_TRAP) {
-        fprintf(stderr, "cart entry trapped: %s\n", cvm_strerror(rc));
-        goto teardown;
+    if (cart_path) {
+        if (app_load_cart(&app, cart_path) != 0)
+            menu_open(app.menu, browse_dir(&app), app.gc ? app.joy_name : NULL, 0);
+    } else {
+        menu_open(app.menu, browse_dir(&app), app.gc ? app.joy_name : NULL, 0);
     }
 
 #ifdef __EMSCRIPTEN__
-    /* No blocking loop in the browser: hand the step to the event loop.
-     * fps=0 → drive from requestAnimationFrame (matches the display, ~60 Hz);
-     * simulate_infinite_loop=1 → this call does not return, so teardown
-     * below is unreachable on web (the page lifecycle reclaims everything). */
-    emscripten_set_main_loop_arg(frame_step, &app, 0, 1);
+    emscripten_set_main_loop_arg(tick, &app, 0, 1);
 #else
     while (app.running && !console.cart_exited)
-        frame_step(&app);
+        tick(&app);
 
+    hostcfg_save(&app.cfg, app.cfg_path);
+    if (app.has_cart) { cvm_image_free(&app.img); free(app.blob); }
     free(app.rgba);
+    menu_destroy(app.menu);
+    close_controller(&app);
 #endif
 
-teardown:
-    if (dev) SDL_CloseAudioDevice(dev);
+    if (app.audio_dev) SDL_CloseAudioDevice(app.audio_dev);
+    cron_synth_destroy(console.synth);
     SDL_DestroyTexture(tex);
     SDL_DestroyRenderer(ren);
     SDL_DestroyWindow(win);
     SDL_Quit();
-    cvm_image_free(&img);
-    free(blob);
     return console.exit_status;
 }

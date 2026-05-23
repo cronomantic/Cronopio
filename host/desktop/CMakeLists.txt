@@ -10,7 +10,7 @@ if(NOT SDL2_FOUND)
     return()
 endif()
 
-add_executable(cronopio main.c)
+add_executable(cronopio main.c menu.c hostcfg.c)
 
 # Self-contained executable: link SDL2 statically so no SDL2.dll is needed.
 # (This LLVM-mingw/UCRT toolchain already links libgcc/libc++/winpthread
