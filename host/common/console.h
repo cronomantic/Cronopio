@@ -182,6 +182,13 @@ typedef struct {
      * The platform shell invokes it via cvm_call once per 1/60 s tick. */
     int32_t  frame_fn_index;
 
+    /* Optional present hook: the platform shell sets this so cron_present can
+     * flush the framebuffer to screen mid-frame / during a blocking cart entry
+     * (e.g. a DOOM loading screen drawn while D_DoomMain runs). NULL = the
+     * default callback-driven model (present once per frame after the frame fn). */
+    void   (*present_cb)(void* ud);
+    void    *present_ud;
+
     /* cart exit signal — set by cron_exit syscall or the platform shell. */
     int      cart_exited;
     int32_t  exit_status;

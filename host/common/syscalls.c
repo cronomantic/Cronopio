@@ -223,10 +223,12 @@ static int sys_text(struct cvm_image *img, int32_t *r, void *ud) {
 }
 
 static int sys_present(struct cvm_image *img, int32_t *r, void *ud) {
-    /* No-op in the callback-driven model — the platform shell blits + vsyncs
-     * after the frame fn returns. Kept as a syscall so cart code that wants
-     * to flush mid-frame compiles. */
-    (void)img; (void)ud;
+    /* If the shell registered a present hook, flush now (lets a cart paint
+     * during a blocking entry — e.g. a loading screen while D_DoomMain runs).
+     * Otherwise a no-op: the shell blits + vsyncs after the frame fn returns. */
+    (void)img;
+    cronopio_console_t *c = ((ctx_t*)ud)->c;
+    if (c->present_cb) c->present_cb(c->present_ud);
     r[0] = 0;
     return 0;
 }

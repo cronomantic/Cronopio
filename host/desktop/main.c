@@ -74,6 +74,18 @@ static uint8_t* slurp(const char* path, size_t* out_len) {
     return buf;
 }
 
+/* Blit the cart framebuffer to the window and present. */
+static void desktop_present(app_t* a) {
+    cronopio_console_blit_rgba(a->console, a->img->heap, a->rgba);
+    SDL_UpdateTexture(a->tex, NULL, a->rgba, CRONOPIO_SCREEN_W * 4);
+    SDL_RenderClear(a->ren);
+    SDL_RenderCopy(a->ren, a->tex, NULL, NULL);
+    SDL_RenderPresent(a->ren);
+}
+/* present hook for cron_present (e.g. a loading screen drawn while the cart's
+ * blocking entry runs, before the frame loop starts). */
+static void desktop_present_cb(void* ud) { desktop_present((app_t*)ud); }
+
 /* One frame: poll input, run the cart's frame fn, blit, present. Called by
  * the native while-loop and by emscripten_set_main_loop. */
 static void frame_step(void* arg) {
@@ -118,11 +130,7 @@ static void frame_step(void* arg) {
         }
     }
 
-    cronopio_console_blit_rgba(console, a->img->heap, a->rgba);
-    SDL_UpdateTexture(a->tex, NULL, a->rgba, CRONOPIO_SCREEN_W * 4);
-    SDL_RenderClear(a->ren);
-    SDL_RenderCopy(a->ren, a->tex, NULL, NULL);
-    SDL_RenderPresent(a->ren);
+    desktop_present(a);
 
     cronopio_console_end_frame(console);
 
@@ -189,16 +197,6 @@ int main(int argc, char** argv) {
     SDL_AudioDeviceID dev = SDL_OpenAudioDevice(NULL, 0, &want, &got, 0);
     if (dev) SDL_PauseAudioDevice(dev, 0);
 
-    /* Run the cart's entry. It is expected to call cron_set_frame(fn) and
-     * return; we then drive that fn ourselves every tick. This call is
-     * short (no blocking), so it needs no ASYNCIFY under Emscripten. */
-    int32_t entry_ret = 0;
-    rc = cvm_run(&img, &entry_ret);
-    if (rc != CVM_OK && rc != CVM_E_SYSCALL_TRAP) {
-        fprintf(stderr, "cart entry trapped: %s\n", cvm_strerror(rc));
-        goto teardown;
-    }
-
     static app_t app;
     app.console = &console;
     app.img     = &img;
@@ -206,6 +204,21 @@ int main(int argc, char** argv) {
     app.tex     = tex;
     app.rgba    = (uint32_t*)malloc((size_t)CRONOPIO_FB_BYTES * 4);
     app.running = 1;
+
+    /* Let cron_present flush to the window during the cart's (blocking) entry,
+     * so a loading screen drawn while D_DoomMain runs is actually shown. */
+    console.present_cb = desktop_present_cb;
+    console.present_ud = &app;
+
+    /* Run the cart's entry. It registers a frame fn via cron_set_frame and
+     * returns — but a DOOM cart blocks here for seconds loading the WAD, during
+     * which it paints a loading screen and calls cron_present (the hook above). */
+    int32_t entry_ret = 0;
+    rc = cvm_run(&img, &entry_ret);
+    if (rc != CVM_OK && rc != CVM_E_SYSCALL_TRAP) {
+        fprintf(stderr, "cart entry trapped: %s\n", cvm_strerror(rc));
+        goto teardown;
+    }
 
 #ifdef __EMSCRIPTEN__
     /* No blocking loop in the browser: hand the step to the event loop.
