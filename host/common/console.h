@@ -224,6 +224,7 @@ int      cron_apu_stream     (cronopio_console_t* c, uint32_t off, int nframes, 
 int      cron_apu_stream_free(cronopio_console_t* c);
 void     cron_apu_pcm    (cronopio_console_t* c, int v, int slot,
                           uint32_t pitch_q16, int vol, int pan, int loop);
+void     cron_apu_pcm_params(cronopio_console_t* c, int v, int vol, int pan);
 void     cron_apu_env    (cronopio_console_t* c, int v, int attack_ms,
                           int decay_ms, int sustain, int release_ms);
 void     cron_apu_note_off(cronopio_console_t* c, int v);

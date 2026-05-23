@@ -83,6 +83,7 @@ future ABI lets carts flush mid-frame.
 | `cvm_sys_cron_pcm`         | `void(i32 v, i32 slot, i32 pitch_q16, i32 vol, i32 pan, i32 loop)` | Play sample `slot` on voice v; pitch 0x10000 = native rate |
 | `cvm_sys_cron_env`         | `void(i32 v, i32 attack_ms, i32 decay_ms, i32 sustain, i32 release_ms)` | ADSR for the next trigger on v          |
 | `cvm_sys_cron_note_off`    | `void(i32 v)`                                                   | Enter the envelope release stage               |
+| `cvm_sys_cron_pcm_params`  | `void(i32 v, i32 vol, i32 pan)`                                 | Update vol/pan of a playing voice (no-op if idle) |
 
 ### Streaming PCM
 

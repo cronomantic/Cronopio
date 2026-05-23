@@ -33,6 +33,7 @@ full control):
 | `cron_sample_u8`     | `void(i32 slot, const u8* ptr, i32 len, i32 rate)`            | Register an 8-bit **unsigned** mono sample (DOOM DMX `DS*`), played straight from ROM — no copy/convert |
 | `cron_snd_tone`      | `void(i32 v, i32 wave, i32 freq_mhz, i32 vol, i32 pan)`        | Synth on voice v (existing) |
 | `cron_pcm`           | `void(i32 v, i32 sample, i32 pitch_q16, i32 vol, i32 pan, i32 loop)` | Play a sample on voice v; pitch 0x10000 = the sample's native rate |
+| `cron_pcm_params`    | `void(i32 v, i32 vol, i32 pan)`                               | Update vol/pan of a voice already playing (no-op if idle) — e.g. DOOM's per-tic 3D repositioning |
 | `cron_env`           | `void(i32 v, i32 attack_ms, i32 decay_ms, i32 sustain, i32 release_ms)` | Envelope applied to the next trigger on v |
 | `cron_note_off`      | `void(i32 v)`                                                  | Enter release |
 | `cron_snd_stop`      | `void(i32 v)`                                                  | Hard stop |
@@ -115,6 +116,5 @@ Implemented: Layer 1 voices (synth + PCM + ADSR, sample banks), SFX as direct
 triggers, and the **MIDI + SoundFont synth (Layer 3)**
 with a default GM "BIOS" bank and cart-loadable `.sf2`. The DOOM port uses all
 of it: music via MUS→MIDI→`cron_midi_send` (host synth), SFX via DMX `DS*` →
-`cron_sample_u8`+`cron_pcm` — both working. Possible future addition: a
-`cron_pcm_params(voice, vol, pan)` syscall so a playing SFX can be repositioned
-in 3D mid-sound (today it keeps its trigger-time volume/pan).
+`cron_sample_u8`+`cron_pcm` — both working, with `cron_pcm_params` applying
+DOOM's per-tic 3D repositioning (volume/pan) to in-flight sounds.

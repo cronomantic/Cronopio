@@ -441,6 +441,13 @@ static int sys_pcm(struct cvm_image *img, int32_t *r, void *ud) {
     r[0] = 0;
     return 0;
 }
+static int sys_pcm_params(struct cvm_image *img, int32_t *r, void *ud) {
+    (void)img;
+    ctx_t *x = (ctx_t*)ud;
+    cron_apu_pcm_params(x->c, (int)r[0], (int)r[1], (int)r[2]);
+    r[0] = 0;
+    return 0;
+}
 static int sys_env(struct cvm_image *img, int32_t *r, void *ud) {
     (void)img;
     ctx_t *x = (ctx_t*)ud;
@@ -606,6 +613,7 @@ static const entry_t kSyscalls[] = {
     { "cvm_sys_cron_snd_master",   sys_snd_master   },
     { "cvm_sys_cron_sample",       sys_sample       },
     { "cvm_sys_cron_pcm",          sys_pcm          },
+    { "cvm_sys_cron_pcm_params",   sys_pcm_params   },
     { "cvm_sys_cron_env",          sys_env          },
     { "cvm_sys_cron_note_off",     sys_note_off     },
     { "cvm_sys_cron_stream",       sys_stream       },

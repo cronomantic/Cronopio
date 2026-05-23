@@ -113,6 +113,7 @@ extern void     cvm_sys_cron_sample      (int32_t slot, const void* ptr, int32_t
 extern int32_t  cvm_sys_cron_stream       (const int16_t* frames, int32_t nframes);
 extern int32_t  cvm_sys_cron_stream_free  (void);
 extern void     cvm_sys_cron_pcm         (int32_t voice, int32_t sample, int32_t pitch_q16, int32_t vol, int32_t pan, int32_t loop);
+extern void     cvm_sys_cron_pcm_params  (int32_t voice, int32_t vol, int32_t pan);
 extern void     cvm_sys_cron_env         (int32_t voice, int32_t attack_ms, int32_t decay_ms, int32_t sustain, int32_t release_ms);
 extern void     cvm_sys_cron_note_off    (int32_t voice);
 extern int32_t  cvm_sys_cron_sf2_load       (const void* sf2, int32_t len);
@@ -195,6 +196,9 @@ static inline void     cron_sample_u8   (int32_t slot, const uint8_t* ptr, int32
 /* Play sample bank `s` on voice `v`. pitch 0x10000 = native rate. */
 static inline void     cron_pcm         (int32_t v, int32_t s, int32_t pitch_q16, int32_t vol, int32_t pan, int32_t loop) { cvm_sys_cron_pcm(v, s, pitch_q16, vol, pan, loop); }
 #define CRON_PITCH_1X  0x10000
+/* Update vol (0..255) / pan (-128..127) of a voice already playing; no-op if
+ * idle. For repositioning an in-flight sound (e.g. DOOM's per-tic 3D update). */
+static inline void     cron_pcm_params  (int32_t v, int32_t vol, int32_t pan) { cvm_sys_cron_pcm_params(v, vol, pan); }
 /* ADSR envelope (ms; sustain 0..255) applied to the next trigger on voice v. */
 static inline void     cron_env         (int32_t v, int32_t a_ms, int32_t d_ms, int32_t sustain, int32_t r_ms) { cvm_sys_cron_env(v, a_ms, d_ms, sustain, r_ms); }
 static inline void     cron_note_off    (int32_t v)                       { cvm_sys_cron_note_off(v); }

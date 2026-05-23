@@ -48,6 +48,16 @@ void cron_apu_pcm(cronopio_console_t* c, int ch, int slot,
     trigger_env(v);
 }
 
+/* Update volume/pan of a voice that is already playing (e.g. DOOM repositioning
+ * an in-flight SFX as its source/listener moves). No-op if the voice is idle. */
+void cron_apu_pcm_params(cronopio_console_t* c, int ch, int vol, int pan) {
+    if ((unsigned)ch >= CRONOPIO_AUDIO_CHANS) return;
+    cron_voice_t* v = &c->voices[ch];
+    if (!v->active) return;
+    v->vol = clampi(vol, 0, 255);
+    v->pan = clampi(pan, -128, 127);
+}
+
 void cron_apu_env(cronopio_console_t* c, int ch, int attack_ms, int decay_ms,
                   int sustain, int release_ms) {
     if ((unsigned)ch >= CRONOPIO_AUDIO_CHANS) return;
