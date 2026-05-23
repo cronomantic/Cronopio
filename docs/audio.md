@@ -137,5 +137,8 @@ synth (Layer 4).
 
 Implemented: Layer 1 voices (synth + PCM + ADSR, sample banks), SFX as direct
 triggers, the MOD player (Layer 3), and the **MIDI + SoundFont synth (Layer 4)**
-with a default GM "BIOS" bank and cart-loadable `.sf2`. Remaining: the DOOM cart
-music backend (MUS→MIDI→`cron_midi_send`) and wiring SFX via `cron_sample_u8`.
+with a default GM "BIOS" bank and cart-loadable `.sf2`. The DOOM port uses all
+of it: music via MUS→MIDI→`cron_midi_send` (host synth), SFX via DMX `DS*` →
+`cron_sample_u8`+`cron_pcm` — both working. Possible future addition: a
+`cron_pcm_params(voice, vol, pan)` syscall so a playing SFX can be repositioned
+in 3D mid-sound (today it keeps its trigger-time volume/pan).
