@@ -51,8 +51,13 @@ static int sys_log(struct cvm_image *img, int32_t *r, void *ud) {
     if (len < 0) len = 0;
     char buf[512];
     if (sane_str(img, addr, (uint32_t)len, buf, sizeof(buf)) != 0) return -1;
-    fputs(buf, stderr);
-    if (len > 0 && buf[len-1] != '\n') fputc('\n', stderr);
+    /* sane_str clamps the copy to sizeof(buf)-1; mirror that here so we never
+     * fwrite past what was actually read into buf. */
+    if ((size_t)len >= sizeof(buf)) len = (int32_t)(sizeof(buf) - 1);
+    /* Write raw: the cart controls newlines. Forcing a '\n' per call broke
+     * progress output like printf(".") with no trailing newline (one dot per
+     * line). fwrite by length so embedded NULs / no terminator are fine. */
+    fwrite(buf, 1, (size_t)len, stderr);
     r[0] = 0;
     return 0;
 }
