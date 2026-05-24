@@ -7,7 +7,8 @@
 #include <stdlib.h>
 
 static const char* const pad_names[PAD_BTN_COUNT] = {
-    "Up", "Down", "Left", "Right", "A", "B", "X", "Y"
+    "Up", "Down", "Left", "Right", "A", "B", "X", "Y",
+    "L", "R", "Start", "Select"
 };
 
 const char* hostcfg_pad_name(int btn) {
@@ -26,6 +27,10 @@ void hostcfg_defaults(host_cfg_t* cfg) {
     cfg->key[PAD_B]     = SDL_SCANCODE_X;
     cfg->key[PAD_X]     = SDL_SCANCODE_C;
     cfg->key[PAD_Y]     = SDL_SCANCODE_V;
+    cfg->key[PAD_L]     = SDL_SCANCODE_A;
+    cfg->key[PAD_R]     = SDL_SCANCODE_S;
+    cfg->key[PAD_START] = SDL_SCANCODE_RETURN;
+    cfg->key[PAD_SELECT]= SDL_SCANCODE_RSHIFT;
 
     cfg->gbtn[PAD_UP]    = SDL_CONTROLLER_BUTTON_DPAD_UP;
     cfg->gbtn[PAD_DOWN]  = SDL_CONTROLLER_BUTTON_DPAD_DOWN;
@@ -35,6 +40,10 @@ void hostcfg_defaults(host_cfg_t* cfg) {
     cfg->gbtn[PAD_B]     = SDL_CONTROLLER_BUTTON_B;
     cfg->gbtn[PAD_X]     = SDL_CONTROLLER_BUTTON_X;
     cfg->gbtn[PAD_Y]     = SDL_CONTROLLER_BUTTON_Y;
+    cfg->gbtn[PAD_L]     = SDL_CONTROLLER_BUTTON_LEFTSHOULDER;
+    cfg->gbtn[PAD_R]     = SDL_CONTROLLER_BUTTON_RIGHTSHOULDER;
+    cfg->gbtn[PAD_START] = SDL_CONTROLLER_BUTTON_START;
+    cfg->gbtn[PAD_SELECT]= SDL_CONTROLLER_BUTTON_BACK;
 
     cfg->joy_guid[0] = '\0';
     cfg->last_dir[0] = '\0';

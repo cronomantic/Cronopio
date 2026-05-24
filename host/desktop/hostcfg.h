@@ -10,12 +10,14 @@
 
 #include <SDL.h>
 
-/* The 8 logical pad buttons, in the bit order the console expects (matches the
- * historical hardcoded map_keys_to_pad: d-pad then A/B/X/Y). cron_input_set_pad
- * receives a mask of (1u << PAD_*). */
+/* The 12 logical pad buttons (SNES-style: d-pad, A/B/X/Y, L/R shoulders,
+ * Start/Select), in the bit order the console expects. These indices MUST match
+ * the CRON_BTN_* bit positions in the SDK (cronopio.h): the console pad word is
+ * a mask of (1u << PAD_*) and the cart reads it as (1u << <bit>). */
 enum {
     PAD_UP = 0, PAD_DOWN, PAD_LEFT, PAD_RIGHT,
     PAD_A, PAD_B, PAD_X, PAD_Y,
+    PAD_L, PAD_R, PAD_START, PAD_SELECT,   /* SNES-style 12-button extension */
     PAD_BTN_COUNT
 };
 

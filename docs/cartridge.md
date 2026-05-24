@@ -76,8 +76,10 @@ cron_bltm(0, x, y, sx, sy, w, h, 0);          /* draw a pixel window of the map 
 ## Input
 
 `cron_pad(0)` / `cron_pad_pressed(0)` / `cron_pad_released(0)` return button
-bitmasks (`CRON_BTN_UP…CRON_BTN_Y`). `cron_key(scancode)` and
-`cron_mouse(&x,&y)` are also available.
+bitmasks for the 12-button pad (`CRON_BTN_UP…CRON_BTN_Y`, plus `CRON_BTN_L`,
+`CRON_BTN_R`, `CRON_BTN_START`, `CRON_BTN_SELECT`). `cron_mouse(&x,&y)` is also
+available. The console exposes only the abstract pad — a host may drive it from
+a keyboard/controller, but carts read input solely through the pad.
 
 ## Audio
 

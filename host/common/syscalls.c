@@ -541,15 +541,6 @@ static int sys_pad_released(struct cvm_image *img, int32_t *r, void *ud) {
     return 0;
 }
 
-static int sys_key(struct cvm_image *img, int32_t *r, void *ud) {
-    (void)img;
-    ctx_t *x = (ctx_t*)ud;
-    int32_t code = r[0];
-    if ((unsigned)code >= 256) { r[0] = 0; return 0; }
-    r[0] = (x->c->keys[code >> 3] >> (code & 7)) & 1;
-    return 0;
-}
-
 static int sys_mouse(struct cvm_image *img, int32_t *r, void *ud) {
     ctx_t   *x = (ctx_t*)ud;
     uint32_t ax = (uint32_t)r[0];
@@ -635,7 +626,6 @@ static const entry_t kSyscalls[] = {
     { "cvm_sys_cron_pad",          sys_pad          },
     { "cvm_sys_cron_pad_pressed",  sys_pad_pressed  },
     { "cvm_sys_cron_pad_released", sys_pad_released },
-    { "cvm_sys_cron_key",          sys_key          },
     { "cvm_sys_cron_mouse",        sys_mouse        },
     /* persistence */
     { "cvm_sys_cron_save_read",    sys_save_read    },

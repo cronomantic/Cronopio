@@ -169,9 +169,6 @@ typedef struct {
     int32_t  mouse_x, mouse_y;
     uint32_t mouse_buttons;
 
-    /* keyboard scancode bitmap (256 bits) — written by the platform shell. */
-    uint8_t  keys[32];
-
     /* timing */
     uint64_t boot_ms;
     uint32_t frame_count;

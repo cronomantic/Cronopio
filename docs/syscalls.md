@@ -113,7 +113,6 @@ load their own `.sf2`. See [audio.md](audio.md) Layer 4.
 | `cvm_sys_cron_pad`            | `u32(i32 player)`               | Returns button bitmask (see below)       |
 | `cvm_sys_cron_pad_pressed`    | `u32(i32 player)`               | Buttons pressed this frame               |
 | `cvm_sys_cron_pad_released`   | `u32(i32 player)`               | Buttons released this frame              |
-| `cvm_sys_cron_key`            | `i32(i32 scancode)`             | 1 if held, 0 otherwise (optional device). `scancode` is a USB HID Keyboard usage ID (see `CRON_KEY_*` in `cronopio.h`); the platform shell fills the key bitmap in that space. |
 | `cvm_sys_cron_mouse`          | `u32(i32* out_x, i32* out_y)`   | Writes x,y; returns button bitmask       |
 
 ## Persistence

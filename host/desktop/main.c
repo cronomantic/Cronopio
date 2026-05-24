@@ -239,16 +239,9 @@ static void run_cart_frame(app_t* a) {
 
     cronopio_console_begin_frame(console);
     const Uint8* keys = SDL_GetKeyboardState(NULL);
+    /* The console exposes only the abstract pad to carts; the keyboard is just
+     * one way to drive it on the desktop (remappable in the F1 menu). */
     console->pad_cur[0] = build_pad(a, keys);
-    /* Snapshot scancodes for cron_key (low 256 cover standard keyboards).
-     * SDL scancodes are USB HID Keyboard usage IDs, which is exactly the
-     * CRON_KEY_* space cron_key() expects — direct copy, no translation. */
-    for (int i = 0; i < 32; ++i) {
-        uint8_t byte = 0;
-        for (int b = 0; b < 8; ++b)
-            if (keys[(i<<3) + b]) byte |= (uint8_t)(1u << b);
-        console->keys[i] = byte;
-    }
 
     if (console->frame_fn_index > 0) {
         int32_t fret = 0;
