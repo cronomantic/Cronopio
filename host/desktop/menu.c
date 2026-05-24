@@ -3,10 +3,12 @@
 
 #include "menu.h"
 #include "font8x8.h"
+#include "cvm.h"          /* CVM_SEC_META — cart metadata section */
 
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <dirent.h>
 #include <sys/stat.h>
 
@@ -23,7 +25,11 @@ typedef enum { SCR_MAIN, SCR_BROWSE, SCR_CONTROLS, SCR_JOYSTICK } screen_t;
 typedef struct {
     char name[NAME_MAX_];
     int  is_dir;
+    char title[64];           /* cart title from CVM_SEC_META, "" if none */
 } entry_t;
+
+/* Cart metadata (CVM_SEC_META payload), read without loading the cart. */
+typedef struct { char title[64], author[48], controls[192]; } cart_meta_t;
 
 struct menu {
     int       open;
@@ -48,6 +54,9 @@ struct menu {
 
     char      status[256];
     const char* joy_name;
+
+    int         meta_sel;   /* browse entry whose META is cached below (-1 = none) */
+    cart_meta_t meta;       /* author/controls of the focused cart, for the footer */
 };
 
 /* ---- glyph atlas ------------------------------------------------------- */
@@ -96,12 +105,79 @@ static void fill(menu_t* m, int x, int y, int w, int h, SDL_Color c) {
 
 /* ---- file browser ------------------------------------------------------ */
 
-static int has_bin_ext(const char* name) {
-    size_t n = strlen(name);
-    return n > 4 && (name[n-4] == '.') &&
-           (name[n-3]=='b'||name[n-3]=='B') &&
-           (name[n-2]=='i'||name[n-2]=='I') &&
-           (name[n-1]=='n'||name[n-1]=='N');
+static int ext_is(const char* name, const char* ext) {
+    size_t n = strlen(name), e = strlen(ext);
+    if (n <= e) return 0;
+    const char* s = name + (n - e);
+    for (size_t i = 0; i < e; ++i) {
+        char a = s[i], b = ext[i];
+        if (a >= 'A' && a <= 'Z') a = (char)(a - 'A' + 'a');
+        if (b >= 'A' && b <= 'Z') b = (char)(b - 'A' + 'a');
+        if (a != b) return 0;
+    }
+    return 1;
+}
+
+/* Cartridge files are .crom; .bin is still accepted for older/dev artifacts. */
+static int has_cart_ext(const char* name) {
+    return ext_is(name, ".crom") || ext_is(name, ".bin");
+}
+
+static uint32_t rd_u32le(const unsigned char* p) {
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8)
+         | ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+/* Read a cart's CVM_SEC_META without loading it: parse the 24-byte header and
+ * the section table, then read just the META blob. Returns 1 if a title was
+ * found. Format of the blob: "CMTA", u8 version, then {u8 key; u16 len LE;
+ * bytes} records (key 1=title, 2=author, 3=controls). */
+static int cart_read_meta(const char* path, cart_meta_t* out) {
+    memset(out, 0, sizeof *out);
+    FILE* f = fopen(path, "rb");
+    if (!f) return 0;
+    unsigned char hdr[24];
+    if (fread(hdr, 1, 24, f) != 24 || memcmp(hdr, "CVM1", 4) != 0) { fclose(f); return 0; }
+    uint32_t count = rd_u32le(hdr + 12), toff = rd_u32le(hdr + 16);
+    uint32_t moff = 0, msz = 0;
+    if (fseek(f, (long)toff, SEEK_SET) == 0) {
+        for (uint32_t i = 0; i < count; ++i) {
+            unsigned char e[16];
+            if (fread(e, 1, 16, f) != 16) break;
+            if (rd_u32le(e) == (uint32_t)CVM_SEC_META) {
+                moff = rd_u32le(e + 4); msz = rd_u32le(e + 8); break;
+            }
+        }
+    }
+    if (msz == 0 || msz > (1u << 16)) { fclose(f); return 0; }
+    unsigned char* blob = (unsigned char*)malloc(msz);
+    int ok = blob && fseek(f, (long)moff, SEEK_SET) == 0
+                  && fread(blob, 1, msz, f) == msz;
+    fclose(f);
+    if (!ok) { free(blob); return 0; }
+
+    int got = 0;
+    if (msz >= 5 && memcmp(blob, "CMTA", 4) == 0) {
+        uint32_t p = 5;                              /* skip magic + version */
+        while (p + 3 <= msz) {
+            unsigned key = blob[p];
+            uint32_t len = (uint32_t)blob[p+1] | ((uint32_t)blob[p+2] << 8);
+            p += 3;
+            if (p + len > msz) break;
+            char*  dst = NULL; size_t cap = 0;
+            if      (key == 1) { dst = out->title;    cap = sizeof out->title; }
+            else if (key == 2) { dst = out->author;   cap = sizeof out->author; }
+            else if (key == 3) { dst = out->controls; cap = sizeof out->controls; }
+            if (dst) {
+                size_t c = len < cap - 1 ? len : cap - 1;
+                memcpy(dst, blob + p, c); dst[c] = '\0';
+                if (key == 1) got = 1;
+            }
+            p += len;
+        }
+    }
+    free(blob);
+    return got;
 }
 
 static int entry_cmp(const void* a, const void* b) {
@@ -158,9 +234,15 @@ static void scan_dir(menu_t* m) {
         path_join(full, sizeof(full), m->cur_dir, de->d_name);
         struct stat st;
         int is_dir = (stat(full, &st) == 0) && S_ISDIR(st.st_mode);
-        if (!is_dir && !has_bin_ext(de->d_name)) continue;   /* only .bin files */
-        snprintf(m->entries[m->n_entries].name, NAME_MAX_, "%s", de->d_name);
-        m->entries[m->n_entries].is_dir = is_dir;
+        if (!is_dir && !has_cart_ext(de->d_name)) continue;   /* dirs + cart files */
+        entry_t* en = &m->entries[m->n_entries];
+        snprintf(en->name, NAME_MAX_, "%s", de->d_name);
+        en->is_dir = is_dir;
+        en->title[0] = '\0';
+        if (!is_dir) {
+            cart_meta_t mt;
+            if (cart_read_meta(full, &mt)) snprintf(en->title, sizeof en->title, "%s", mt.title);
+        }
         m->n_entries++;
     }
     closedir(dp);
@@ -402,7 +484,8 @@ static const char* lbl_main(menu_t* m, int i, char* buf, size_t cap) {
 
 static const char* lbl_browse(menu_t* m, int i, char* buf, size_t cap) {
     entry_t* e = &m->entries[i];
-    if (e->is_dir) snprintf(buf, cap, "[%s]", e->name);
+    if (e->is_dir)        snprintf(buf, cap, "[%s]", e->name);
+    else if (e->title[0]) snprintf(buf, cap, "%s  -  %s", e->title, e->name);
     else           snprintf(buf, cap, "%s", e->name);
     return buf;
 }
@@ -447,6 +530,19 @@ void menu_render(menu_t* m) {
             char title[1100];
             snprintf(title, sizeof(title), "LOAD: %s", m->cur_dir);
             draw_list(m, title, x, y, w, m->n_entries, lbl_browse);
+            /* Refresh the focused cart's metadata (author/controls) for the
+             * footer; cached so we read the file only when the selection moves. */
+            if (m->sel > 0 && m->sel < m->n_entries && !m->entries[m->sel].is_dir) {
+                if (m->meta_sel != m->sel) {
+                    char full[1300];
+                    path_join(full, sizeof full, m->cur_dir, m->entries[m->sel].name);
+                    cart_read_meta(full, &m->meta);
+                    m->meta_sel = m->sel;
+                }
+            } else {
+                m->meta_sel = -1;
+                m->meta.author[0] = m->meta.controls[0] = '\0';
+            }
             break;
         }
         case SCR_CONTROLS:
@@ -461,8 +557,17 @@ void menu_render(menu_t* m) {
         }
     }
 
-    /* footer: status line + key hints */
+    /* footer: focused-cart detail (browse) + status line + key hints */
     int fy = py + ph - CH - 14;
+    if (m->screen == SCR_BROWSE && (m->meta.author[0] || m->meta.controls[0])) {
+        if (m->meta.author[0]) {
+            char ab[128];
+            snprintf(ab, sizeof ab, "by %s", m->meta.author);
+            draw_text(m, x, fy - ROW_H * 3, COL_HINT, ab);
+        }
+        if (m->meta.controls[0])
+            draw_text(m, x, fy - ROW_H * 2, COL_TEXT, m->meta.controls);
+    }
     if (m->status[0]) draw_text(m, x, fy - ROW_H, COL_TITLE, m->status);
     const char* hint =
         (m->screen == SCR_MAIN) ? "Up/Down move   Enter select   Esc resume"

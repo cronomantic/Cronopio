@@ -178,6 +178,9 @@ static void usage(FILE *f) {
         "  --heap-reserve=N[K|M]    override default 32M\n"
         "  --stack-reserve=N[K|M]   override default 256K\n"
         "  --rom=FILE               bake FILE as read-only cartridge ROM\n"
+        "  --title=STR              cart title shown by the launcher\n"
+        "  --author=STR             cart author\n"
+        "  --controls=STR           controls help shown on load\n"
         "  -v, --verbose            print every command\n"
         "\n"
         "Discovery overrides:\n"
@@ -428,6 +431,36 @@ static int scaffold(int argc, char **argv) {
 
 /* ---- compile ----------------------------------------------------------- */
 
+/* Cart metadata blob (the CVM_SEC_META payload the host reads to show a cart's
+ * title/controls before running). Format: "CMTA" magic, u8 version=1, then
+ * records {u8 key; u16 len LE; bytes} until the end. keys: 1=title, 2=author,
+ * 3=controls. Opaque to the VM. Returns 0 on success. */
+static int write_meta_file(const char *path, const char *title,
+                           const char *author, const char *controls) {
+    FILE *f = fopen(path, "wb");
+    if (!f) {
+        fprintf(stderr, "cronopio-cc: cannot write metadata '%s': %s\n",
+                path, strerror(errno));
+        return 1;
+    }
+    fputc('C', f); fputc('M', f); fputc('T', f); fputc('A', f);
+    fputc(1, f);   /* version */
+    const struct { unsigned char key; const char *val; } recs[] = {
+        { 1, title }, { 2, author }, { 3, controls },
+    };
+    for (int i = 0; i < 3; ++i) {
+        if (!recs[i].val) continue;
+        size_t L = strlen(recs[i].val);
+        if (L > 0xFFFFu) L = 0xFFFFu;
+        fputc((int)recs[i].key, f);
+        fputc((int)(L & 0xFFu), f);
+        fputc((int)((L >> 8) & 0xFFu), f);
+        fwrite(recs[i].val, 1, L, f);
+    }
+    fclose(f);
+    return 0;
+}
+
 int main(int argc, char **argv) {
     if (argc >= 2 && strcmp(argv[1], "new") == 0)
         return scaffold(argc, argv);
@@ -438,6 +471,7 @@ int main(int argc, char **argv) {
 
     const char *cvm_cc_override = NULL;
     const char *sdk_override    = NULL;
+    const char *title = NULL, *author = NULL, *controls = NULL, *outpath = NULL;
     int have_heap = 0, have_stack = 0, verbose = 0;
 
     /* Collect pass-through args; intercept only the few we care about. */
@@ -447,8 +481,14 @@ int main(int argc, char **argv) {
         const char *a = argv[i];
         if (strncmp(a, "--cvm-cc=", 9) == 0)      { cvm_cc_override = a + 9; continue; }
         if (strncmp(a, "--sdk=", 6) == 0)         { sdk_override = a + 6; continue; }
+        /* Metadata flags are consumed here (packed into a CVM_SEC_META blob),
+         * not forwarded to cvm-cc. */
+        if (strncmp(a, "--title=", 8) == 0)       { title = a + 8; continue; }
+        if (strncmp(a, "--author=", 9) == 0)      { author = a + 9; continue; }
+        if (strncmp(a, "--controls=", 11) == 0)   { controls = a + 11; continue; }
         if (strncmp(a, "--heap-reserve=", 15) == 0)  have_heap = 1;
         if (strncmp(a, "--stack-reserve=", 16) == 0) have_stack = 1;
+        if (strcmp(a, "-o") == 0 && i + 1 < argc) outpath = argv[i + 1];
         if (strcmp(a, "-v") == 0 || strcmp(a, "--verbose") == 0) verbose = 1;
         if (nf >= 240) { fprintf(stderr, "cronopio-cc: too many arguments\n"); return 2; }
         fwd[nf++] = (char *)a;
@@ -470,10 +510,31 @@ int main(int argc, char **argv) {
     cargv[n++] = (char *)"-I";
     cargv[n++] = sdk;
     for (int i = 0; i < nf; ++i) cargv[n++] = fwd[i];
+
+    /* If any metadata flag was given, pack it into a temp blob beside the output
+     * and hand it to cvm-cc via --meta=. */
+    char  metapath[1100] = {0};
+    char  metaarg[1108]  = {0};
+    int   have_meta = (title || author || controls);
+    if (have_meta) {
+        if (!outpath) {
+            fprintf(stderr, "cronopio-cc: --title/--author/--controls require -o <output>\n");
+            free(cvm_cc); free(sdk);
+            return 2;
+        }
+        snprintf(metapath, sizeof metapath, "%s.cmeta", outpath);
+        if (write_meta_file(metapath, title, author, controls) != 0) {
+            free(cvm_cc); free(sdk);
+            return 1;
+        }
+        snprintf(metaarg, sizeof metaarg, "--meta=%s", metapath);
+        cargv[n++] = metaarg;
+    }
     cargv[n] = NULL;
 
     int rc = run_cmd(verbose, cargv);
     free(cvm_cc); free(sdk);
+    if (have_meta) remove(metapath);   /* the blob is baked into the .bin now */
     if (rc != 0) {
         fprintf(stderr, "cronopio-cc: cvm-cc failed (exit %d)\n", rc);
         return rc < 0 ? 1 : rc;

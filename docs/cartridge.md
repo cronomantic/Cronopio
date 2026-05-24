@@ -1,18 +1,34 @@
 # Writing a Cronopio cartridge
 
-A cartridge is a CronoVM `.bin` compiled from C. You include `<cronopio.h>`
-(and, for 3D, `<cronopio3d.h>`), write a frame callback, and the host drives
-it at 60 Hz. This page is the front door; the full syscall list is in
-[`syscalls.md`](syscalls.md).
+A cartridge is a CronoVM binary compiled from C, by convention with the
+`.crom` extension (Cronopio ROM; `.bin` is still accepted). You include
+`<cronopio.h>` (and, for 3D, `<cronopio3d.h>`), write a frame callback, and the
+host drives it at 60 Hz. This page is the front door; the full syscall list is
+in [`syscalls.md`](syscalls.md).
 
 ## Quickstart
 
 ```sh
 cronopio-cc new mygame      # scaffold mygame/{main.c,CMakeLists.txt,README.md,.gitignore}
 cd mygame
-cronopio-cc main.c -o mygame.bin
-cronopio mygame.bin         # run it
+cronopio-cc main.c -o mygame.crom
+cronopio mygame.crom        # run it
 ```
+
+## Metadata (title / author / controls)
+
+Tag a cart so the launcher can show what it is and how to play it — pass at
+build time:
+
+```sh
+cronopio-cc main.c -o mygame.crom \
+  --title="My Game" --author="Me" --controls="D-pad move | A jump | B shoot"
+```
+
+These are baked into a host-only `CVM_SEC_META` section (not visible to the
+running program). The desktop launcher reads it without loading the cart: the
+file browser lists the title and shows the author + controls of the focused
+cart.
 
 `new` picks a starting point — `--template=basic` (default), `sprites`, or
 `3d`; run `cronopio-cc new --list` to see them, or omit `--template` on a
