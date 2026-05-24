@@ -951,8 +951,20 @@ int vprintf(const char *fmt, va_list ap) {
 }
 
 int vfprintf(FILE *stream, const char *fmt, va_list ap) {
-    (void)stream;   /* no real streams; everything goes to the console */
-    return _cvm_log_vfmt(fmt, ap);
+    if (!stream) return _cvm_log_vfmt(fmt, ap);   /* std stream -> console */
+    /* RAM-FS file: format then write the bytes into the file. */
+    char buf[1024];
+    va_list ap2; va_copy(ap2, ap);
+    int n = cvm_vfmt(buf, sizeof buf, fmt, ap);
+    if (n < 0) { va_end(ap2); return n; }
+    if ((size_t)n < sizeof buf) {
+        fwrite(buf, 1, (size_t)n, stream);
+    } else {                                       /* didn't fit: size exactly */
+        char *big = (char *)malloc((size_t)n + 1);
+        if (big) { cvm_vfmt(big, (size_t)n + 1, fmt, ap2); fwrite(big, 1, (size_t)n, stream); free(big); }
+    }
+    va_end(ap2);
+    return n;
 }
 
 /* ---- variadic wrappers (printf family; va_start works on this target) -- */
@@ -982,10 +994,9 @@ int printf(const char *fmt, ...) {
 }
 
 int fprintf(FILE *stream, const char *fmt, ...) {
-    (void)stream;
     va_list ap;
     va_start(ap, fmt);
-    int r = _cvm_log_vfmt(fmt, ap);
+    int r = vfprintf(stream, fmt, ap);
     va_end(ap);
     return r;
 }
@@ -998,16 +1009,16 @@ int puts(const char *s) {
 }
 
 int fputs(const char *s, FILE *stream) {
-    (void)stream;
     size_t n = strlen(s);
-    cron_log(s, (int32_t)n);
+    if (stream) fwrite(s, 1, n, stream);     /* RAM-FS file */
+    else        cron_log(s, (int32_t)n);     /* std -> console */
     return (int)n;
 }
 
 int fputc(int c, FILE *stream) {
-    (void)stream;
     char ch = (char)c;
-    cron_log(&ch, 1);
+    if (stream) fwrite(&ch, 1, 1, stream);   /* RAM-FS file */
+    else        cron_log(&ch, 1);            /* std -> console */
     return (unsigned char)c;
 }
 
@@ -1318,11 +1329,106 @@ int ungetc(int c, FILE *stream) {
     return c;
 }
 
-/* fscanf is not supported over the RAM FS (no parser); returns EOF. Savegame
- * I/O uses fread/fwrite, not fscanf. */
+/* fscanf over a RAM-FS file. Supports the directives ports actually use for
+ * text config: whitespace (skips a run), literal chars, %% , and
+ * %[*][width](s|d|i|u|x|[set]) — enough for crispy's "%79s %99[^\n]" config
+ * lines. Reads via fgetc/ungetc; no console input (NULL stream -> EOF). */
+/* Whitespace test. Written as an explicit range so clang does NOT fold the
+ * c==' '||c=='\t'||... chain into a 24-bit bitmask test (the ws codes span
+ * 9..32 = 24 values), which the translator rejects (no i24). 9..13 = \t\n\v\f\r,
+ * 32 = space. */
+static int sf_isws(int c) { return (c >= 9 && c <= 13) || c == 32; }
+
 int fscanf(FILE *stream, const char *fmt, ...) {
-    (void)stream; (void)fmt;
-    return -1;
+    if (!stream) return -1;
+    va_list ap; va_start(ap, fmt);
+    int assigned = 0, saw_input = 0, c;
+    const char *f = fmt;
+    while (*f) {
+        if (sf_isws(*f)) {                       /* whitespace: skip input ws */
+            do { c = fgetc(stream); } while (sf_isws(c));
+            if (c != EOF) ungetc(c, stream);
+            f++;
+            continue;
+        }
+        if (*f != '%') {                         /* literal: must match */
+            c = fgetc(stream);
+            if (c != (unsigned char)*f) { if (c != EOF) ungetc(c, stream); goto done; }
+            saw_input = 1; f++;
+            continue;
+        }
+        /* conversion */
+        f++;
+        int suppress = 0; if (*f == '*') { suppress = 1; f++; }
+        int width = 0, have_w = 0;
+        while (*f >= '0' && *f <= '9') { width = width*10 + (*f - '0'); have_w = 1; f++; }
+        char conv = *f ? *f++ : 0;
+
+        if (conv == '%') {
+            c = fgetc(stream);
+            if (c != '%') { if (c != EOF) ungetc(c, stream); goto done; }
+            saw_input = 1; continue;
+        }
+        if (conv == 'd' || conv == 'i' || conv == 'u' || conv == 'x') {
+            do { c = fgetc(stream); } while (sf_isws(c));
+            int base = (conv == 'x') ? 16 : 10, neg = 0, got = 0;
+            long val = 0;
+            if ((c == '-' || c == '+') && conv != 'u' && conv != 'x') { neg = (c=='-'); c = fgetc(stream); }
+            int n = 0;
+            while (c != EOF && (!have_w || n < width)) {
+                int d;
+                if (c >= '0' && c <= '9') d = c - '0';
+                else if (base == 16 && c >= 'a' && c <= 'f') d = c - 'a' + 10;
+                else if (base == 16 && c >= 'A' && c <= 'F') d = c - 'A' + 10;
+                else break;
+                val = val*base + d; got = 1; saw_input = 1; n++;
+                c = fgetc(stream);
+            }
+            if (c != EOF) ungetc(c, stream);
+            if (!got) goto done;
+            if (neg) val = -val;
+            if (!suppress) { *va_arg(ap, int*) = (int)val; assigned++; }
+            continue;
+        }
+        if (conv == 's' || conv == '[') {
+            int negate = 0;
+            const char *set0 = 0, *set1 = 0;
+            if (conv == '[') {
+                if (*f == '^') { negate = 1; f++; }
+                set0 = f;
+                while (*f && *f != ']') f++;
+                set1 = f;
+                if (*f == ']') f++;
+            } else {
+                do { c = fgetc(stream); } while (sf_isws(c));   /* %s skips leading ws */
+                goto have_first;          /* c already holds the first char */
+            }
+            c = fgetc(stream);
+        have_first:;
+            char *out = suppress ? 0 : va_arg(ap, char*);
+            int n = 0;
+            for (;;) {
+                if (c == EOF) break;
+                int match;
+                if (conv == 's') match = !sf_isws(c);
+                else { int in = 0; for (const char *s = set0; s < set1; ++s) if ((unsigned char)*s == c) { in = 1; break; } match = negate ? !in : in; }
+                if (!match || (have_w && n >= width)) break;
+                if (out) out[n] = (char)c;
+                n++; saw_input = 1;
+                c = fgetc(stream);
+            }
+            if (c != EOF) ungetc(c, stream);
+            if (out) out[n] = '\0';
+            if (conv == 's' && n == 0) goto done;   /* %s requires >=1 char */
+            if (!suppress) assigned++;
+            continue;
+        }
+        goto done;   /* unsupported conversion */
+    }
+done:
+    va_end(ap);
+    if (assigned == 0 && !saw_input) return -1;   /* EOF / nothing matched */
+    return assigned;
 }
 
 /* ---- <locale.h>: fixed "C" locale ------------------------------------- */
