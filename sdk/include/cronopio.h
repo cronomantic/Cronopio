@@ -98,6 +98,8 @@ extern uint32_t cvm_sys_cron_mouse       (int32_t* out_x, int32_t* out_y);
 
 extern int32_t  cvm_sys_cron_save_read   (uint8_t* dst, int32_t len);
 extern int32_t  cvm_sys_cron_save_write  (const uint8_t* src, int32_t len);
+extern int32_t  cvm_sys_cron_save_size   (void);
+extern int32_t  cvm_sys_cron_save_used   (void);
 
 /* Extended graphics (0x100): banks, sprites, tilemaps, shapes, draw state. */
 extern void     cvm_sys_cron_image       (int32_t slot, const uint8_t* ptr, int32_t w, int32_t h);
@@ -198,6 +200,8 @@ static inline uint32_t cron_mouse       (int32_t* x, int32_t* y)          { retu
 
 static inline int32_t  cron_save_read   (uint8_t* d, int32_t n)           { return cvm_sys_cron_save_read(d, n); }
 static inline int32_t  cron_save_write  (const uint8_t* s, int32_t n)     { return cvm_sys_cron_save_write(s, n); }
+static inline int32_t  cron_save_size   (void)                            { return cvm_sys_cron_save_size(); }
+static inline int32_t  cron_save_used   (void)                            { return cvm_sys_cron_save_used(); }
 
 /* Extended graphics ---------------------------------------------------*/
 /* Register an 8bpp sprite sheet (in RAM or ROM) as image bank `slot`. */

@@ -559,8 +559,9 @@ static int sys_save_read(struct cvm_image *img, int32_t *r, void *ud) {
     uint32_t dst = (uint32_t)r[0];
     int32_t  len = r[1];
     if (len < 0) { r[0] = 0; return 0; }
-    if (len > (int32_t)CRONOPIO_SAVE_BYTES) len = (int32_t)CRONOPIO_SAVE_BYTES;
-    if (cvm_heap_write(img, dst, x->c->save, (size_t)len) != CVM_OK) return -1;
+    /* Only the live bytes are available (what was last written / loaded). */
+    if (len > (int32_t)x->c->save_len) len = (int32_t)x->c->save_len;
+    if (len > 0 && cvm_heap_write(img, dst, x->c->save, (size_t)len) != CVM_OK) return -1;
     r[0] = len;
     return 0;
 }
@@ -571,9 +572,22 @@ static int sys_save_write(struct cvm_image *img, int32_t *r, void *ud) {
     int32_t  len = r[1];
     if (len < 0) { r[0] = 0; return 0; }
     if (len > (int32_t)CRONOPIO_SAVE_BYTES) len = (int32_t)CRONOPIO_SAVE_BYTES;
-    if (cvm_heap_read(img, src, x->c->save, (size_t)len) != CVM_OK) return -1;
+    if (len > 0 && cvm_heap_read(img, src, x->c->save, (size_t)len) != CVM_OK) return -1;
+    x->c->save_len   = (uint32_t)len;
     x->c->save_dirty = 1;
     r[0] = len;
+    return 0;
+}
+
+static int sys_save_size(struct cvm_image *img, int32_t *r, void *ud) {
+    (void)img; (void)ud;
+    r[0] = (int32_t)CRONOPIO_SAVE_BYTES;   /* capacity of the save blob */
+    return 0;
+}
+
+static int sys_save_used(struct cvm_image *img, int32_t *r, void *ud) {
+    (void)img;
+    r[0] = (int32_t)((ctx_t*)ud)->c->save_len;   /* live bytes (what read returns) */
     return 0;
 }
 
@@ -630,6 +644,8 @@ static const entry_t kSyscalls[] = {
     /* persistence */
     { "cvm_sys_cron_save_read",    sys_save_read    },
     { "cvm_sys_cron_save_write",   sys_save_write   },
+    { "cvm_sys_cron_save_size",    sys_save_size    },
+    { "cvm_sys_cron_save_used",    sys_save_used    },
     /* extended graphics: banks + sprites/tilemaps */
     { "cvm_sys_cron_image",        sys_image        },
     { "cvm_sys_cron_tilemap",      sys_tilemap      },

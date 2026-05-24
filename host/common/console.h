@@ -22,7 +22,10 @@
 
 /* Envelope stages. */
 enum { CRON_ENV_OFF = 0, CRON_ENV_ATTACK, CRON_ENV_DECAY, CRON_ENV_SUSTAIN, CRON_ENV_RELEASE };
-#define CRONOPIO_SAVE_BYTES   1024
+/* Per-cart save blob ("memory card"). Large enough for a cart's RAM filesystem
+ * (e.g. DOOM's savegame slots, ~176 KB each). The host persists save[0..save_len]
+ * to <cart>.sav and reloads it on boot; only the live bytes are written. */
+#define CRONOPIO_SAVE_BYTES   (8u * 1024u * 1024u)
 #define CRONOPIO_IMAGE_SLOTS     8
 #define CRONOPIO_TILEMAP_SLOTS   8
 #define CRONOPIO_TILE_SIZE       8
@@ -190,8 +193,10 @@ typedef struct {
     int      cart_exited;
     int32_t  exit_status;
 
-    /* persistence */
+    /* persistence — see CRONOPIO_SAVE_BYTES. save_len = live bytes (what the
+     * host writes to <cart>.sav and what cron_save_read returns). */
     uint8_t  save[CRONOPIO_SAVE_BYTES];
+    uint32_t save_len;
     int      save_dirty;
 } cronopio_console_t;
 

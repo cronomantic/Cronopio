@@ -165,6 +165,39 @@ static void desktop_present_cb(void* ud) {
 
 /* ---- cart load / reset (also the menu's load_cart/reset_cart callbacks) -- */
 
+/* ---- per-cart save persistence ("memory card") ------------------------- */
+/* The cart's save blob lives beside the cart as <cart>.sav. We load it before
+ * running the cart (its libc reads the save region at boot) and write it back
+ * whenever the cart marks it dirty, atomically (temp + rename). */
+
+static void load_cart_save(app_t* a) {
+    a->console->save_len = 0;
+    a->console->save_dirty = 0;
+    if (!a->cart_path[0]) return;
+    char p[1100];
+    snprintf(p, sizeof p, "%s.sav", a->cart_path);
+    FILE* f = fopen(p, "rb");
+    if (!f) return;
+    size_t n = fread(a->console->save, 1, CRONOPIO_SAVE_BYTES, f);
+    fclose(f);
+    a->console->save_len = (uint32_t)n;
+}
+
+static void persist_cart_save(app_t* a) {
+    if (!a->has_cart || !a->console->save_dirty || !a->cart_path[0]) return;
+    char p[1100], tmp[1112];
+    snprintf(p,   sizeof p,   "%s.sav",     a->cart_path);
+    snprintf(tmp, sizeof tmp, "%s.sav.tmp", a->cart_path);
+    FILE* f = fopen(tmp, "wb");
+    if (!f) return;
+    size_t n  = a->console->save_len;
+    int    ok = (n == 0) || (fwrite(a->console->save, 1, n, f) == n);
+    if (fclose(f) != 0) ok = 0;
+    if (ok) { remove(p); rename(tmp, p); }   /* swap in atomically-ish */
+    else    { remove(tmp); }
+    a->console->save_dirty = 0;
+}
+
 /* Load the cart at `path`, swapping out any current one. Returns 0 on success;
  * on failure the running cart (if any) is left untouched. Safe to call while
  * audio is live: the swap happens under the audio lock. */
@@ -182,6 +215,9 @@ static int app_load_cart(void* ud, const char* path) {
         free(nblob);
         return -1;
     }
+
+    /* Flush the outgoing cart's save before tearing its console down. */
+    persist_cart_save(a);
 
     /* Stop the audio thread touching the console while we tear it down. */
     if (a->audio_dev) SDL_LockAudioDevice(a->audio_dev);
@@ -206,6 +242,10 @@ static int app_load_cart(void* ud, const char* path) {
     if (cronopio_resolve_video_regions(&a->img, a->console) != 0)
         fprintf(stderr, "warning: cart declares no 'fb'/'pal' — drawing no-ops.\n");
     cronopio_syscalls_install(&a->img, a->console);
+
+    /* Seed the save region from <cart>.sav before the cart's entry runs (its
+     * libc reads the save blob at boot). */
+    load_cart_save(a);
 
     if (a->audio_dev) SDL_UnlockAudioDevice(a->audio_dev);
 
@@ -253,6 +293,9 @@ static void run_cart_frame(app_t* a) {
     }
     refresh_tex(a);
     cronopio_console_end_frame(console);
+
+    /* Write the save out if the cart touched it this frame. */
+    persist_cart_save(a);
 }
 
 /* Directory to seed the file browser with: last used, else the executable's. */
@@ -397,6 +440,7 @@ int main(int argc, char** argv) {
     while (app.running && !console.cart_exited)
         tick(&app);
 
+    persist_cart_save(&app);   /* flush the save on exit */
     hostcfg_save(&app.cfg, app.cfg_path);
     if (app.has_cart) { cvm_image_free(&app.img); free(app.blob); }
     free(app.rgba);

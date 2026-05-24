@@ -57,7 +57,18 @@ struct menu {
 
     int         meta_sel;   /* browse entry whose META is cached below (-1 = none) */
     cart_meta_t meta;       /* author/controls of the focused cart, for the footer */
+    long        save_size;  /* size of the focused cart's <cart>.sav, -1 if none */
 };
+
+/* Size of a file in bytes, or -1 if it doesn't exist. */
+static long file_size(const char* path) {
+    FILE* f = fopen(path, "rb");
+    if (!f) return -1;
+    fseek(f, 0, SEEK_END);
+    long n = ftell(f);
+    fclose(f);
+    return n;
+}
 
 /* ---- glyph atlas ------------------------------------------------------- */
 
@@ -364,6 +375,20 @@ void menu_close(menu_t* m) { m->open = 0; m->capturing = 0; }
 
 void menu_set_joy_name(menu_t* m, const char* name) { if (m) m->joy_name = name; }
 
+/* Delete the focused cart's <cart>.sav (browser only). */
+static void delete_focused_save(menu_t* m) {
+    if (m->screen != SCR_BROWSE) return;
+    if (m->sel <= 0 || m->sel >= m->n_entries || m->entries[m->sel].is_dir) return;
+    char full[1300], sp[1320];
+    path_join(full, sizeof full, m->cur_dir, m->entries[m->sel].name);
+    snprintf(sp, sizeof sp, "%s.sav", full);
+    if (remove(sp) == 0)
+        snprintf(m->status, sizeof m->status, "Deleted save: %s", m->entries[m->sel].name);
+    else
+        snprintf(m->status, sizeof m->status, "No save to delete");
+    m->meta_sel = -1;   /* refresh footer save size */
+}
+
 int menu_handle_event(menu_t* m, const SDL_Event* ev) {
     if (!m->open) return 0;
 
@@ -401,6 +426,7 @@ int menu_handle_event(menu_t* m, const SDL_Event* ev) {
             case SDL_SCANCODE_RIGHT: goto activate;
             case SDL_SCANCODE_ESCAPE:
             case SDL_SCANCODE_LEFT:  goto back;
+            case SDL_SCANCODE_DELETE: delete_focused_save(m); return 1;
             default: return 1;
         }
     }
@@ -534,14 +560,17 @@ void menu_render(menu_t* m) {
              * footer; cached so we read the file only when the selection moves. */
             if (m->sel > 0 && m->sel < m->n_entries && !m->entries[m->sel].is_dir) {
                 if (m->meta_sel != m->sel) {
-                    char full[1300];
+                    char full[1300], sp[1320];
                     path_join(full, sizeof full, m->cur_dir, m->entries[m->sel].name);
                     cart_read_meta(full, &m->meta);
+                    snprintf(sp, sizeof sp, "%s.sav", full);
+                    m->save_size = file_size(sp);
                     m->meta_sel = m->sel;
                 }
             } else {
                 m->meta_sel = -1;
                 m->meta.author[0] = m->meta.controls[0] = '\0';
+                m->save_size = -1;
             }
             break;
         }
@@ -559,7 +588,13 @@ void menu_render(menu_t* m) {
 
     /* footer: focused-cart detail (browse) + status line + key hints */
     int fy = py + ph - CH - 14;
-    if (m->screen == SCR_BROWSE && (m->meta.author[0] || m->meta.controls[0])) {
+    if (m->screen == SCR_BROWSE) {
+        if (m->save_size >= 0) {
+            char sv[96];
+            snprintf(sv, sizeof sv, "Save: %ld KB   (Del erases)",
+                     (m->save_size + 1023) / 1024);
+            draw_text(m, x, fy - ROW_H * 4, COL_TITLE, sv);
+        }
         if (m->meta.author[0]) {
             char ab[128];
             snprintf(ab, sizeof ab, "by %s", m->meta.author);
@@ -571,7 +606,7 @@ void menu_render(menu_t* m) {
     if (m->status[0]) draw_text(m, x, fy - ROW_H, COL_TITLE, m->status);
     const char* hint =
         (m->screen == SCR_MAIN) ? "Up/Down move   Enter select   Esc resume"
-      : (m->screen == SCR_BROWSE) ? "Enter open/load   Esc back"
+      : (m->screen == SCR_BROWSE) ? "Enter open/load   Del erase save   Esc back"
       : "Enter rebind   Esc back";
     draw_text(m, x, fy, COL_HINT, hint);
 }

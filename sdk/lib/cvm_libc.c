@@ -531,11 +531,12 @@ void _cvm_assert_fail(const char *expr, const char *file, int line) {
 
 /* ============================== stdio.h ================================ */
 
-/* FILE is opaque. We provide three real objects whose addresses act as
- * sentinels (stdin/stdout/stderr). There is no filesystem, so fopen always
- * fails; printf-family output ignores the stream and goes to cron_log. A port
- * that needs bundled data must read it from the cartridge ROM (cron_rom). */
-struct _CVM_FILE { int dummy; };
+/* FILE handles. The standard streams are NULL (see below) and the printf family
+ * routes to cron_log regardless. A non-NULL FILE* is a handle into the RAM
+ * filesystem (a small persisted "memory card", see the file-I/O section): every
+ * fopen()'d file lives in RAM and is serialised to the host save blob on close.
+ * Bundled read-only assets still come from the cartridge ROM (cron_rom). */
+struct _CVM_FILE { int slot; unsigned int pos; int writing; int eofbit; };
 /* The translator only serialises pointer globals when the initialiser is NULL
  * (it cannot relocate the address of another global, nor an inttoptr constant
  * expr). So the three standard streams are NULL pointers. That is fine here:
@@ -1113,57 +1114,215 @@ int sscanf(const char *str, const char *fmt, ...) {
     return r;
 }
 
-/* ---- file I/O stubs ---------------------------------------------------- */
-/* No filesystem on the console. fopen always fails; reads return EOF/0;
- * remove/rename fail. Bundled assets MUST be read from the cartridge ROM
- * (cron_rom in <cronopio.h>), never through these. */
+/* ---- RAM filesystem ("memory card") ----------------------------------- */
+/* The console has no host filesystem, but a cart gets a small PERSISTED blob
+ * (the save region — see <cronopio.h> cron_save_*). We expose it to ports as a
+ * tiny in-RAM filesystem: every fopen()'d file lives in a heap buffer here,
+ * loaded from the save blob on first use and serialised back on close. This is
+ * how a ported engine's file-based saves (DOOM's savegames) persist with no
+ * engine changes. Bounded by cron_save_size(); NOT a general filesystem.
+ * Bundled read-only assets still come from the cartridge ROM (cron_rom).
+ *
+ * std streams (stdin/stdout/stderr) are NULL; the printf family + a NULL stream
+ * route to cron_log. A non-NULL FILE* is always a RAM-FS handle. */
 
-FILE *fopen(const char *path, const char *mode) {
-    (void)path; (void)mode;
-    errno = ENOENT;
-    return NULL;
+#define RAMFS_MAX    24
+#define RAMFS_NAME   96
+#define RAMFS_MAGIC  0x31534643u   /* 'C','F','S','1' little-endian */
+
+typedef struct { int used; char name[RAMFS_NAME]; uint8_t *data; uint32_t len, cap; } ramfile_t;
+static ramfile_t        g_fs[RAMFS_MAX];
+static struct _CVM_FILE g_fh[RAMFS_MAX];
+static int              g_fh_used[RAMFS_MAX];
+static int              g_fs_loaded = 0;
+
+static uint32_t cvm_rd32(const uint8_t *p) {
+    return (uint32_t)p[0] | ((uint32_t)p[1]<<8) | ((uint32_t)p[2]<<16) | ((uint32_t)p[3]<<24);
+}
+static void cvm_wr32(uint8_t *p, uint32_t v) {
+    p[0]=(uint8_t)v; p[1]=(uint8_t)(v>>8); p[2]=(uint8_t)(v>>16); p[3]=(uint8_t)(v>>24);
 }
 
-int fclose(FILE *stream) { (void)stream; return 0; }
+/* Deserialise the FS from the persisted save blob (once, lazily). */
+static void ramfs_load(void) {
+    if (g_fs_loaded) return;
+    g_fs_loaded = 1;
+    int32_t used = cron_save_used();
+    if (used < 8) return;
+    uint8_t *buf = (uint8_t *)malloc((size_t)used);
+    if (!buf) return;
+    int32_t got = cron_save_read(buf, used);
+    if (got >= 8 && cvm_rd32(buf) == RAMFS_MAGIC) {
+        uint32_t count = cvm_rd32(buf + 4), o = 8;
+        for (uint32_t i = 0; i < count && i < RAMFS_MAX; ++i) {
+            if (o + 6 > (uint32_t)got) break;
+            uint32_t nl = (uint32_t)buf[o] | ((uint32_t)buf[o+1] << 8); o += 2;
+            if (o + nl + 4 > (uint32_t)got) break;
+            uint32_t nc = nl < RAMFS_NAME ? nl : RAMFS_NAME - 1;
+            memcpy(g_fs[i].name, buf + o, nc); g_fs[i].name[nc] = 0; o += nl;
+            uint32_t dl = cvm_rd32(buf + o); o += 4;
+            if (o + dl > (uint32_t)got) break;
+            g_fs[i].data = (uint8_t *)malloc(dl ? dl : 1);
+            if (!g_fs[i].data) break;
+            if (dl) memcpy(g_fs[i].data, buf + o, dl);
+            g_fs[i].len = dl; g_fs[i].cap = dl ? dl : 1; g_fs[i].used = 1;
+            o += dl;
+        }
+    }
+    free(buf);
+}
 
-size_t fread(void *ptr, size_t size, size_t nmemb, FILE *stream) {
-    (void)ptr; (void)size; (void)nmemb; (void)stream;
+/* Serialise the whole FS back into the save blob (host persists it to disk). */
+static void ramfs_flush(void) {
+    uint32_t total = 8, n = 0;
+    for (int i = 0; i < RAMFS_MAX; ++i)
+        if (g_fs[i].used) { total += 2 + (uint32_t)strlen(g_fs[i].name) + 4 + g_fs[i].len; n++; }
+    uint8_t *buf = (uint8_t *)malloc(total);
+    if (!buf) return;
+    cvm_wr32(buf, RAMFS_MAGIC); cvm_wr32(buf + 4, n);
+    uint32_t o = 8;
+    for (int i = 0; i < RAMFS_MAX; ++i) if (g_fs[i].used) {
+        uint32_t nl = (uint32_t)strlen(g_fs[i].name);
+        buf[o] = (uint8_t)nl; buf[o+1] = (uint8_t)(nl >> 8); o += 2;
+        memcpy(buf + o, g_fs[i].name, nl); o += nl;
+        cvm_wr32(buf + o, g_fs[i].len); o += 4;
+        if (g_fs[i].len) memcpy(buf + o, g_fs[i].data, g_fs[i].len);
+        o += g_fs[i].len;
+    }
+    cron_save_write(buf, (int32_t)total);
+    free(buf);
+}
+
+static int ramfs_find(const char *name) {
+    for (int i = 0; i < RAMFS_MAX; ++i)
+        if (g_fs[i].used && strcmp(g_fs[i].name, name) == 0) return i;
+    return -1;
+}
+static int ramfs_create(const char *name) {
+    for (int i = 0; i < RAMFS_MAX; ++i) if (!g_fs[i].used) {
+        g_fs[i].used = 1; snprintf(g_fs[i].name, RAMFS_NAME, "%s", name);
+        g_fs[i].data = NULL; g_fs[i].len = 0; g_fs[i].cap = 0;
+        return i;
+    }
+    return -1;
+}
+static int ramfile_grow(ramfile_t *f, uint32_t need) {
+    if (need <= f->cap) return 0;
+    uint32_t nc = f->cap ? f->cap : 256;
+    while (nc < need) nc <<= 1;
+    uint8_t *nd = (uint8_t *)realloc(f->data, nc);
+    if (!nd) return -1;
+    f->data = nd; f->cap = nc;
     return 0;
 }
 
+/* ---- stdio over the RAM filesystem ------------------------------------- */
+
+FILE *fopen(const char *path, const char *mode) {
+    if (!path || !mode) { errno = ENOENT; return NULL; }
+    ramfs_load();
+    int write = (mode[0] == 'w' || mode[0] == 'a');
+    int slot  = ramfs_find(path);
+    if (!write && slot < 0) { errno = ENOENT; return NULL; }
+    if (write) {
+        if (slot < 0) slot = ramfs_create(path);
+        if (slot < 0) { errno = ENOENT; return NULL; }
+        if (mode[0] == 'w') g_fs[slot].len = 0;   /* truncate */
+    }
+    int h = -1;
+    for (int i = 0; i < RAMFS_MAX; ++i) if (!g_fh_used[i]) { h = i; break; }
+    if (h < 0) { errno = ENOENT; return NULL; }
+    g_fh_used[h] = 1;
+    g_fh[h].slot    = slot;
+    g_fh[h].pos     = (mode[0] == 'a') ? g_fs[slot].len : 0;
+    g_fh[h].writing = write;
+    g_fh[h].eofbit  = 0;
+    return &g_fh[h];
+}
+
+int fclose(FILE *stream) {
+    if (!stream) return 0;            /* std stream */
+    if (stream->writing) ramfs_flush();
+    int h = (int)(stream - g_fh);
+    if (h >= 0 && h < RAMFS_MAX) g_fh_used[h] = 0;
+    return 0;
+}
+
+size_t fread(void *ptr, size_t size, size_t nmemb, FILE *stream) {
+    if (!stream || !ptr || size == 0 || nmemb == 0) return 0;
+    ramfile_t *f = &g_fs[stream->slot];
+    size_t want = size * nmemb;
+    uint32_t avail = (stream->pos < f->len) ? (f->len - stream->pos) : 0;
+    size_t got = want < avail ? want : avail;
+    if (got) { memcpy(ptr, f->data + stream->pos, got); stream->pos += (uint32_t)got; }
+    if (got < want) stream->eofbit = 1;
+    return got / size;
+}
+
 size_t fwrite(const void *ptr, size_t size, size_t nmemb, FILE *stream) {
-    /* writes to the console streams are echoed; file streams drop. Since all
-     * our FILE objects are console sentinels, echo the bytes. */
-    (void)stream;
     if (size == 0 || nmemb == 0) return 0;
-    /* cron_log takes int32 length; cap to avoid overflow without 64-bit math */
     size_t total = size * nmemb;
-    cron_log((const char *)ptr, (int32_t)total);
+    if (!stream) { cron_log((const char *)ptr, (int32_t)total); return nmemb; }  /* std */
+    ramfile_t *f = &g_fs[stream->slot];
+    if (ramfile_grow(f, stream->pos + (uint32_t)total) != 0) return 0;
+    memcpy(f->data + stream->pos, ptr, total);
+    stream->pos += (uint32_t)total;
+    if (stream->pos > f->len) f->len = stream->pos;
     return nmemb;
 }
 
 int fseek(FILE *stream, long offset, int whence) {
-    (void)stream; (void)offset; (void)whence;
-    return -1;
+    if (!stream) return -1;
+    ramfile_t *f = &g_fs[stream->slot];
+    long base = (whence == SEEK_CUR) ? (long)stream->pos
+              : (whence == SEEK_END) ? (long)f->len : 0;
+    long np = base + offset;
+    if (np < 0) return -1;
+    stream->pos = (uint32_t)np;
+    stream->eofbit = 0;
+    return 0;
 }
 
-long ftell(FILE *stream) { (void)stream; return -1; }
+long ftell(FILE *stream) { return stream ? (long)stream->pos : -1; }
 
-int fflush(FILE *stream) { (void)stream; return 0; }
+int fflush(FILE *stream) {
+    if (stream && stream->writing) ramfs_flush();
+    return 0;
+}
 
 char *fgets(char *s, int size, FILE *stream) {
-    (void)s; (void)size; (void)stream;
-    return NULL;   /* no input */
+    if (!stream || !s || size <= 0) return NULL;
+    ramfile_t *f = &g_fs[stream->slot];
+    int i = 0;
+    while (i < size - 1 && stream->pos < f->len) {
+        char c = (char)f->data[stream->pos++];
+        s[i++] = c;
+        if (c == '\n') break;
+    }
+    if (i == 0) { stream->eofbit = 1; return NULL; }
+    s[i] = '\0';
+    return s;
 }
 
-int fgetc(FILE *stream) { (void)stream; return EOF; }
+int fgetc(FILE *stream) {
+    if (!stream) return EOF;
+    ramfile_t *f = &g_fs[stream->slot];
+    if (stream->pos >= f->len) { stream->eofbit = 1; return EOF; }
+    return (int)f->data[stream->pos++];
+}
 
-int ungetc(int c, FILE *stream) { (void)stream; return c; }
+int ungetc(int c, FILE *stream) {
+    if (!stream || c == EOF || stream->pos == 0) return EOF;
+    stream->pos--;
+    stream->eofbit = 0;
+    return c;
+}
 
-/* No host filesystem: file reads return EOF. fscanf cannot match anything. */
+/* fscanf is not supported over the RAM FS (no parser); returns EOF. Savegame
+ * I/O uses fread/fwrite, not fscanf. */
 int fscanf(FILE *stream, const char *fmt, ...) {
     (void)stream; (void)fmt;
-    return -1; /* EOF */
+    return -1;
 }
 
 /* ---- <locale.h>: fixed "C" locale ------------------------------------- */
@@ -1189,16 +1348,29 @@ struct lconv *localeconv(void) {
     return &lc;
 }
 
-int feof(FILE *stream) { (void)stream; return 1; }
+int feof(FILE *stream) { return stream ? stream->eofbit : 1; }
 
 int ferror(FILE *stream) { (void)stream; return 0; }
 
-int remove(const char *path) { (void)path; errno = ENOENT; return -1; }
+int remove(const char *path) {
+    ramfs_load();
+    int s = ramfs_find(path);
+    if (s < 0) { errno = ENOENT; return -1; }
+    free(g_fs[s].data);
+    g_fs[s].used = 0; g_fs[s].data = NULL; g_fs[s].len = g_fs[s].cap = 0;
+    ramfs_flush();
+    return 0;
+}
 
 int rename(const char *oldp, const char *newp) {
-    (void)oldp; (void)newp;
-    errno = ENOENT;
-    return -1;
+    ramfs_load();
+    int s = ramfs_find(oldp);
+    if (s < 0) { errno = ENOENT; return -1; }
+    int d = ramfs_find(newp);            /* replace any existing destination */
+    if (d >= 0 && d != s) { free(g_fs[d].data); g_fs[d].used = 0; g_fs[d].data = NULL; }
+    snprintf(g_fs[s].name, RAMFS_NAME, "%s", newp);
+    ramfs_flush();
+    return 0;
 }
 
 void perror(const char *s) {
@@ -1227,8 +1399,12 @@ int mkdir(const char *path, unsigned int mode) {
 
 /* ============================== unistd.h =============================== */
 
-int access(const char *path, int mode) { (void)path; (void)mode; return -1; }
-int unlink(const char *path) { (void)path; errno = ENOENT; return -1; }
+int access(const char *path, int mode) {
+    (void)mode; ramfs_load();
+    if (path && ramfs_find(path) >= 0) return 0;
+    errno = ENOENT; return -1;
+}
+int unlink(const char *path) { return remove(path); }
 char *getcwd(char *buf, size_t size) {
     if (buf && size) buf[0] = '\0';
     return buf;

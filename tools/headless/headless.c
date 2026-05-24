@@ -52,6 +52,12 @@ int main(int argc, char** argv) {
         fprintf(stderr, "warning: no fb/pal regions\n");
     cronopio_syscalls_install(&img, &console);
 
+    /* Per-cart save ("memory card"): load <cart>.sav before the entry runs. */
+    char savepath[1100];
+    snprintf(savepath, sizeof savepath, "%s.sav", argv[1]);
+    { FILE* sf = fopen(savepath, "rb");
+      if (sf) { console.save_len = (uint32_t)fread(console.save, 1, CRONOPIO_SAVE_BYTES, sf); fclose(sf); } }
+
     int32_t ret = 0;
     rc = cvm_run(&img, &ret);
     if (rc != CVM_OK && rc != CVM_E_SYSCALL_TRAP) {
@@ -69,6 +75,18 @@ int main(int argc, char** argv) {
             }
         }
         cronopio_console_end_frame(&console);
+    }
+
+    /* Flush the save if the cart wrote to it (atomic: temp + rename). */
+    if (console.save_dirty) {
+        char tmp[1112]; snprintf(tmp, sizeof tmp, "%s.tmp", savepath);
+        FILE* sf = fopen(tmp, "wb");
+        if (sf) {
+            int ok = (console.save_len == 0) ||
+                     (fwrite(console.save, 1, console.save_len, sf) == console.save_len);
+            if (fclose(sf) != 0) ok = 0;
+            if (ok) { remove(savepath); rename(tmp, savepath); } else remove(tmp);
+        }
     }
 
     /* Histogram of the framebuffer. */
