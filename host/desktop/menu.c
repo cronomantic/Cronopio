@@ -40,6 +40,7 @@ struct menu {
     SDL_Renderer* ren;
     SDL_Texture*  font;     /* 128x48 glyph atlas (16x6 cells), white on clear */
     int       win_w, win_h;
+    int       clip_x2;   /* right edge for text clipping (panel content), set per render */
 
     host_cfg_t*  cfg;
     menu_host_t  host;
@@ -116,6 +117,7 @@ static void draw_text(menu_t* m, int x, int y, SDL_Color c, const char* s) {
     SDL_SetTextureColorMod(m->font, c.r, c.g, c.b);
     SDL_SetTextureAlphaMod(m->font, c.a);
     for (; *s; ++s, x += CW) {
+        if (m->clip_x2 && x + CW > m->clip_x2) break;   /* don't spill past the panel */
         unsigned char ch = (unsigned char)*s;
         if (ch < 0x20 || ch > 0x7F) ch = '?';
         int gi = ch - 0x20;
@@ -619,6 +621,17 @@ static const char* lbl_joystick(menu_t* m, int i, char* buf, size_t cap) {
     return buf;
 }
 
+/* Build "<prefix><path>" but keep it within maxchars by showing the path TAIL
+ * with a leading "..." when it's too long (the current dir is the useful part). */
+static void path_label(char* out, size_t cap, const char* prefix,
+                       const char* path, int maxchars) {
+    int plen  = (int)strlen(path);
+    int avail = maxchars - (int)strlen(prefix);
+    if (avail < 8) avail = 8;
+    if (plen <= avail) snprintf(out, cap, "%s%s", prefix, path);
+    else               snprintf(out, cap, "%s...%s", prefix, path + (plen - (avail - 3)));
+}
+
 /* A panel rectangle with a 1px border. */
 static void panel(menu_t* m, int x, int y, int w, int h) {
     fill(m, x, y, w, h, COL_PANEL);
@@ -638,6 +651,7 @@ void menu_render(menu_t* m) {
     panel(m, px, py, pw, ph);
 
     int x = px + 28, y = py + 22, w = pw - 56;
+    m->clip_x2 = x + w;   /* clip text to the panel content width */
 
     switch (m->screen) {
         case SCR_MAIN:
@@ -645,7 +659,7 @@ void menu_render(menu_t* m) {
             break;
         case SCR_BROWSE: {
             char title[1100];
-            snprintf(title, sizeof(title), "LOAD CARTRIDGE   %s", m->cur_dir);
+            path_label(title, sizeof title, "LOAD  ", m->cur_dir, w / CW);
             draw_list(m, title, x, y, w, m->n_entries, lbl_browse);
             break;
         }

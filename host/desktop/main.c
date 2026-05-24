@@ -221,6 +221,22 @@ static int app_load_cart(void* ud, const char* path) {
         return -1;
     }
 
+    /* Reject anything that isn't a Cronopio cartridge (must declare the fb/pal
+     * regions) BEFORE tearing down the running cart — otherwise we'd run a
+     * non-cart image and likely crash. Old cart is left untouched on failure. */
+    {
+        uint32_t off, sz;
+        if (cvm_image_get_region(&nimg, CRONOPIO_FB_REGION,  &off, &sz) != CVM_OK
+            || sz < CRONOPIO_FB_BYTES
+            || cvm_image_get_region(&nimg, CRONOPIO_PAL_REGION, &off, &sz) != CVM_OK
+            || sz < CRONOPIO_PAL_BYTES) {
+            fprintf(stderr, "%s: not a Cronopio cartridge (no fb/pal region)\n", path);
+            cvm_image_free(&nimg);
+            free(nblob);
+            return -1;
+        }
+    }
+
     /* Flush the outgoing cart's save before tearing its console down. */
     persist_cart_save(a);
 
