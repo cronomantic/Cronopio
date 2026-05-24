@@ -70,6 +70,20 @@ static long file_size(const char* path) {
     return n;
 }
 
+/* Copy src -> dst (binary). Returns 0 on success. */
+static int copy_file(const char* src, const char* dst) {
+    FILE* in = fopen(src, "rb");
+    if (!in) return -1;
+    FILE* out = fopen(dst, "wb");
+    if (!out) { fclose(in); return -1; }
+    char buf[8192]; size_t n; int ok = 1;
+    while ((n = fread(buf, 1, sizeof buf, in)) > 0)
+        if (fwrite(buf, 1, n, out) != n) { ok = 0; break; }
+    fclose(in);
+    if (fclose(out) != 0) ok = 0;
+    return ok ? 0 : -1;
+}
+
 /* ---- glyph atlas ------------------------------------------------------- */
 
 static SDL_Texture* build_font_atlas(SDL_Renderer* ren) {
@@ -375,18 +389,38 @@ void menu_close(menu_t* m) { m->open = 0; m->capturing = 0; }
 
 void menu_set_joy_name(menu_t* m, const char* name) { if (m) m->joy_name = name; }
 
-/* Delete the focused cart's <cart>.sav (browser only). */
-static void delete_focused_save(menu_t* m) {
-    if (m->screen != SCR_BROWSE) return;
-    if (m->sel <= 0 || m->sel >= m->n_entries || m->entries[m->sel].is_dir) return;
-    char full[1300], sp[1320];
+/* Resolve the focused cart's save / backup paths. Returns 0 on success. */
+static int focused_save_paths(menu_t* m, char* sav, size_t scap, char* bak, size_t bcap) {
+    if (m->screen != SCR_BROWSE) return -1;
+    if (m->sel <= 0 || m->sel >= m->n_entries || m->entries[m->sel].is_dir) return -1;
+    char full[1300];
     path_join(full, sizeof full, m->cur_dir, m->entries[m->sel].name);
-    snprintf(sp, sizeof sp, "%s.sav", full);
-    if (remove(sp) == 0)
-        snprintf(m->status, sizeof m->status, "Deleted save: %s", m->entries[m->sel].name);
-    else
-        snprintf(m->status, sizeof m->status, "No save to delete");
-    m->meta_sel = -1;   /* refresh footer save size */
+    snprintf(sav, scap, "%s.sav", full);
+    if (bak) snprintf(bak, bcap, "%s.sav.bak", full);
+    return 0;
+}
+
+/* Delete / export (backup) / import (restore) the focused cart's save. */
+static void delete_focused_save(menu_t* m) {
+    char sav[1320];
+    if (focused_save_paths(m, sav, sizeof sav, NULL, 0) != 0) return;
+    snprintf(m->status, sizeof m->status,
+             remove(sav) == 0 ? "Deleted save: %s" : "No save to delete",
+             m->entries[m->sel].name);
+    m->meta_sel = -1;
+}
+static void export_focused_save(menu_t* m) {
+    char sav[1320], bak[1340];
+    if (focused_save_paths(m, sav, sizeof sav, bak, sizeof bak) != 0) return;
+    snprintf(m->status, sizeof m->status,
+             copy_file(sav, bak) == 0 ? "Backed up save -> .sav.bak" : "No save to back up");
+}
+static void import_focused_save(menu_t* m) {
+    char sav[1320], bak[1340];
+    if (focused_save_paths(m, sav, sizeof sav, bak, sizeof bak) != 0) return;
+    snprintf(m->status, sizeof m->status,
+             copy_file(bak, sav) == 0 ? "Restored save from .sav.bak" : "No backup (.sav.bak) found");
+    m->meta_sel = -1;
 }
 
 int menu_handle_event(menu_t* m, const SDL_Event* ev) {
@@ -427,6 +461,8 @@ int menu_handle_event(menu_t* m, const SDL_Event* ev) {
             case SDL_SCANCODE_ESCAPE:
             case SDL_SCANCODE_LEFT:  goto back;
             case SDL_SCANCODE_DELETE: delete_focused_save(m); return 1;
+            case SDL_SCANCODE_E:      export_focused_save(m); return 1;
+            case SDL_SCANCODE_I:      import_focused_save(m); return 1;
             default: return 1;
         }
     }
@@ -606,7 +642,7 @@ void menu_render(menu_t* m) {
     if (m->status[0]) draw_text(m, x, fy - ROW_H, COL_TITLE, m->status);
     const char* hint =
         (m->screen == SCR_MAIN) ? "Up/Down move   Enter select   Esc resume"
-      : (m->screen == SCR_BROWSE) ? "Enter open/load   Del erase save   Esc back"
+      : (m->screen == SCR_BROWSE) ? "Enter load  E backup  I restore  Del erase  Esc back"
       : "Enter rebind   Esc back";
     draw_text(m, x, fy, COL_HINT, hint);
 }

@@ -22,10 +22,12 @@
 
 /* Envelope stages. */
 enum { CRON_ENV_OFF = 0, CRON_ENV_ATTACK, CRON_ENV_DECAY, CRON_ENV_SUSTAIN, CRON_ENV_RELEASE };
-/* Per-cart save blob ("memory card"). Large enough for a cart's RAM filesystem
- * (e.g. DOOM's savegame slots, ~176 KB each). The host persists save[0..save_len]
- * to <cart>.sav and reloads it on boot; only the live bytes are written. */
-#define CRONOPIO_SAVE_BYTES   (8u * 1024u * 1024u)
+/* Per-cart save blob ("memory card"). Host-allocated, grows on demand: the
+ * region starts small and auto-grows when the cart writes more (or pre-reserves
+ * via cron_save_reserve), up to CRONOPIO_SAVE_MAX. The host persists
+ * save[0..save_len] to <cart>.sav and reloads it on boot (live bytes only). */
+#define CRONOPIO_SAVE_DEFAULT (64u * 1024u)         /* initial capacity */
+#define CRONOPIO_SAVE_MAX     (64u * 1024u * 1024u) /* hard cap, anti-runaway */
 #define CRONOPIO_IMAGE_SLOTS     8
 #define CRONOPIO_TILEMAP_SLOTS   8
 #define CRONOPIO_TILE_SIZE       8
@@ -193,9 +195,10 @@ typedef struct {
     int      cart_exited;
     int32_t  exit_status;
 
-    /* persistence — see CRONOPIO_SAVE_BYTES. save_len = live bytes (what the
-     * host writes to <cart>.sav and what cron_save_read returns). */
-    uint8_t  save[CRONOPIO_SAVE_BYTES];
+    /* persistence — host-owned, malloc'd. save_cap = current capacity (grows),
+     * save_len = live bytes (persisted to <cart>.sav, returned by save_read). */
+    uint8_t *save;
+    uint32_t save_cap;
     uint32_t save_len;
     int      save_dirty;
 } cronopio_console_t;
@@ -203,6 +206,10 @@ typedef struct {
 void cronopio_console_init(cronopio_console_t* c);
 void cronopio_console_begin_frame(cronopio_console_t* c);
 void cronopio_console_end_frame(cronopio_console_t* c);
+
+/* Save region (memory card) management — see the save fields above. */
+int  cronopio_save_reserve(cronopio_console_t* c, uint32_t need);
+void cronopio_save_free(cronopio_console_t* c);
 
 /* Initialise the palette region of a freshly-loaded cart's heap with the
  * default 32-colour palette. fb_region/pal_region are heap-relative

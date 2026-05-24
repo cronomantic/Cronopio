@@ -171,16 +171,21 @@ static void desktop_present_cb(void* ud) {
  * whenever the cart marks it dirty, atomically (temp + rename). */
 
 static void load_cart_save(app_t* a) {
-    a->console->save_len = 0;
-    a->console->save_dirty = 0;
+    cronopio_console_t* c = a->console;
+    c->save_len = 0;
+    c->save_dirty = 0;
+    cronopio_save_reserve(c, CRONOPIO_SAVE_DEFAULT);   /* baseline capacity */
     if (!a->cart_path[0]) return;
     char p[1100];
     snprintf(p, sizeof p, "%s.sav", a->cart_path);
     FILE* f = fopen(p, "rb");
     if (!f) return;
-    size_t n = fread(a->console->save, 1, CRONOPIO_SAVE_BYTES, f);
+    fseek(f, 0, SEEK_END); long sz = ftell(f); fseek(f, 0, SEEK_SET);
+    if (sz > 0) {
+        cronopio_save_reserve(c, (uint32_t)sz);        /* grow to hold the file */
+        c->save_len = (uint32_t)fread(c->save, 1, c->save_cap, f);
+    }
     fclose(f);
-    a->console->save_len = (uint32_t)n;
 }
 
 static void persist_cart_save(app_t* a) {
@@ -229,6 +234,7 @@ static int app_load_cart(void* ud, const char* path) {
     /* Full console reset: drop the old synth, re-init (reloads the BIOS SF2),
      * then re-establish the host hooks console_init clears. */
     cron_synth_destroy(a->console->synth);
+    cronopio_save_free(a->console);   /* free the outgoing cart's save buffer */
     cronopio_console_init(a->console);
     a->console->boot_ms    = SDL_GetTicks();
     a->console->present_cb = desktop_present_cb;
@@ -441,6 +447,7 @@ int main(int argc, char** argv) {
         tick(&app);
 
     persist_cart_save(&app);   /* flush the save on exit */
+    cronopio_save_free(&console);
     hostcfg_save(&app.cfg, app.cfg_path);
     if (app.has_cart) { cvm_image_free(&app.img); free(app.blob); }
     free(app.rgba);

@@ -571,7 +571,8 @@ static int sys_save_write(struct cvm_image *img, int32_t *r, void *ud) {
     uint32_t src = (uint32_t)r[0];
     int32_t  len = r[1];
     if (len < 0) { r[0] = 0; return 0; }
-    if (len > (int32_t)CRONOPIO_SAVE_BYTES) len = (int32_t)CRONOPIO_SAVE_BYTES;
+    /* Grow the region on demand (capped); clamp the write if we can't. */
+    if (!cronopio_save_reserve(x->c, (uint32_t)len)) len = (int32_t)x->c->save_cap;
     if (len > 0 && cvm_heap_read(img, src, x->c->save, (size_t)len) != CVM_OK) return -1;
     x->c->save_len   = (uint32_t)len;
     x->c->save_dirty = 1;
@@ -580,14 +581,23 @@ static int sys_save_write(struct cvm_image *img, int32_t *r, void *ud) {
 }
 
 static int sys_save_size(struct cvm_image *img, int32_t *r, void *ud) {
-    (void)img; (void)ud;
-    r[0] = (int32_t)CRONOPIO_SAVE_BYTES;   /* capacity of the save blob */
+    (void)img;
+    r[0] = (int32_t)((ctx_t*)ud)->c->save_cap;   /* current capacity */
     return 0;
 }
 
 static int sys_save_used(struct cvm_image *img, int32_t *r, void *ud) {
     (void)img;
     r[0] = (int32_t)((ctx_t*)ud)->c->save_len;   /* live bytes (what read returns) */
+    return 0;
+}
+
+static int sys_save_reserve(struct cvm_image *img, int32_t *r, void *ud) {
+    (void)img;
+    ctx_t *x = (ctx_t*)ud;
+    int32_t n = r[0];
+    if (n > 0) cronopio_save_reserve(x->c, (uint32_t)n);
+    r[0] = (int32_t)x->c->save_cap;   /* capacity after the request */
     return 0;
 }
 
@@ -646,6 +656,7 @@ static const entry_t kSyscalls[] = {
     { "cvm_sys_cron_save_write",   sys_save_write   },
     { "cvm_sys_cron_save_size",    sys_save_size    },
     { "cvm_sys_cron_save_used",    sys_save_used    },
+    { "cvm_sys_cron_save_reserve", sys_save_reserve },
     /* extended graphics: banks + sprites/tilemaps */
     { "cvm_sys_cron_image",        sys_image        },
     { "cvm_sys_cron_tilemap",      sys_tilemap      },

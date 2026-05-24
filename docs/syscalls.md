@@ -121,14 +121,16 @@ A per-cart save blob (a "memory card"). The host persists `save_write`'s bytes
 to `<cart>.sav` (atomically) and reloads them before the cart runs. The SDK libc
 layers a small **RAM filesystem** on top — `fopen`/`fread`/`fwrite`/`rename`/… —
 so a ported engine's file-based saves (e.g. DOOM's savegames) persist with no
-engine changes. Bounded by `cron_save_size()`.
+engine changes. The region is host-allocated and **grows on demand** (writes
+auto-grow it; a cart can pre-reserve), up to a 64 MB cap.
 
 | Name                       | Signature                       | Notes                                          |
 |----------------------------|---------------------------------|------------------------------------------------|
 | `cvm_sys_cron_save_read`   | `i32(u8* dst, i32 len)`         | Read up to `len` live bytes; returns bytes read |
-| `cvm_sys_cron_save_write`  | `i32(const u8* src, i32 len)`   | Replace the save blob with `len` bytes; persisted |
-| `cvm_sys_cron_save_size`   | `i32(void)`                     | Capacity of the save blob in bytes              |
+| `cvm_sys_cron_save_write`  | `i32(const u8* src, i32 len)`   | Replace the save blob with `len` bytes (auto-grows); persisted |
+| `cvm_sys_cron_save_size`   | `i32(void)`                     | Current capacity of the save blob in bytes      |
 | `cvm_sys_cron_save_used`   | `i32(void)`                     | Live bytes currently stored (what read returns) |
+| `cvm_sys_cron_save_reserve`| `i32(i32 bytes)`                | Ensure capacity ≥ `bytes`; returns new capacity |
 
 ## Extended graphics (0x100) — sprites, tilemaps, shapes, draw state
 

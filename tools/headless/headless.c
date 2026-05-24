@@ -55,8 +55,12 @@ int main(int argc, char** argv) {
     /* Per-cart save ("memory card"): load <cart>.sav before the entry runs. */
     char savepath[1100];
     snprintf(savepath, sizeof savepath, "%s.sav", argv[1]);
+    cronopio_save_reserve(&console, CRONOPIO_SAVE_DEFAULT);
     { FILE* sf = fopen(savepath, "rb");
-      if (sf) { console.save_len = (uint32_t)fread(console.save, 1, CRONOPIO_SAVE_BYTES, sf); fclose(sf); } }
+      if (sf) { fseek(sf,0,SEEK_END); long sz=ftell(sf); fseek(sf,0,SEEK_SET);
+                if (sz > 0) { cronopio_save_reserve(&console, (uint32_t)sz);
+                              console.save_len = (uint32_t)fread(console.save, 1, console.save_cap, sf); }
+                fclose(sf); } }
 
     int32_t ret = 0;
     rc = cvm_run(&img, &ret);

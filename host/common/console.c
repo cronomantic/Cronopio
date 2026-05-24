@@ -1,6 +1,31 @@
 #include "console.h"
 
 #include <string.h>
+#include <stdlib.h>
+
+/* Ensure the save region holds at least `need` bytes (grows by doubling, zero-
+ * extended), capped at CRONOPIO_SAVE_MAX. Returns 1 on success, 0 if the cap is
+ * exceeded or realloc fails. Shared by the host load path and the save syscalls. */
+int cronopio_save_reserve(cronopio_console_t* c, uint32_t need) {
+    if (need <= c->save_cap) return 1;
+    if (need > CRONOPIO_SAVE_MAX) return 0;
+    uint32_t nc = c->save_cap ? c->save_cap : CRONOPIO_SAVE_DEFAULT;
+    while (nc < need) nc <<= 1;
+    if (nc > CRONOPIO_SAVE_MAX) nc = CRONOPIO_SAVE_MAX;
+    uint8_t* nb = (uint8_t*)realloc(c->save, nc);
+    if (!nb) return 0;
+    memset(nb + c->save_cap, 0, nc - c->save_cap);
+    c->save = nb;
+    c->save_cap = nc;
+    return 1;
+}
+
+void cronopio_save_free(cronopio_console_t* c) {
+    free(c->save);
+    c->save = NULL;
+    c->save_cap = c->save_len = 0;
+    c->save_dirty = 0;
+}
 
 /* A pleasant 32-colour starter set occupies indices 0..31; seed_palette
  * fills 32..255 with a grayscale ramp so all 256 entries are valid for a
