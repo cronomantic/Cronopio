@@ -505,6 +505,7 @@ int main(int argc, char **argv) {
     cargv[n++] = cvm_cc;
     cargv[n++] = (char *)CRON_REGION_FB;
     cargv[n++] = (char *)CRON_REGION_PAL;
+    cargv[n++] = (char *)"--seal";   /* every Cronopio cart is sealed (magic + crc) */
     if (!have_heap)  cargv[n++] = (char *)CRON_HEAP_DEF;
     if (!have_stack) cargv[n++] = (char *)CRON_STACK_DEF;
     cargv[n++] = (char *)"-I";

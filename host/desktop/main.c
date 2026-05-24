@@ -235,6 +235,14 @@ static int app_load_cart(void* ud, const char* path) {
             free(nblob);
             return -1;
         }
+        /* Strict: require a valid integrity seal (magic + crc32). Rejects
+         * unsealed or corrupt/tampered files. */
+        if (cvm_seal_check(nblob, nlen) != 1) {
+            fprintf(stderr, "%s: bad or missing cartridge seal (corrupt / not sealed)\n", path);
+            cvm_image_free(&nimg);
+            free(nblob);
+            return -1;
+        }
     }
 
     /* Flush the outgoing cart's save before tearing its console down. */

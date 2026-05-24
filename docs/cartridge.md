@@ -30,6 +30,14 @@ running program). The desktop launcher reads it without loading the cart: the
 file browser lists the title and shows the author + controls of the focused
 cart.
 
+## Sealing
+
+`cronopio-cc` always **seals** the cartridge (`cvm-cc --seal`): it appends an
+integrity seal — a magic + a CRC-32 of the file. The desktop launcher uses it to
+list only valid Cronopio cartridges (cheap magic check) and to reject corrupt or
+tampered files at load (CRC). A file without a valid seal won't appear in the
+browser and won't load.
+
 `new` picks a starting point — `--template=basic` (default), `sprites`, or
 `3d`; run `cronopio-cc new --list` to see them, or omit `--template` on a
 terminal to be prompted.

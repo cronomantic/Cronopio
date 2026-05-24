@@ -210,6 +210,33 @@ static int cart_read_meta(const char* path, cart_meta_t* out) {
     return got;
 }
 
+/* Cheap check that a file is a sealed Cronopio cartridge: parse header + section
+ * table, find the SEAL section, and verify just its magic (no full-file CRC — the
+ * checksum is verified at load time). Used to filter the browser. */
+static int cart_has_seal(const char* path) {
+    FILE* f = fopen(path, "rb");
+    if (!f) return 0;
+    unsigned char hdr[24];
+    if (fread(hdr, 1, 24, f) != 24 || memcmp(hdr, "CVM1", 4) != 0) { fclose(f); return 0; }
+    uint32_t count = rd_u32le(hdr + 12), toff = rd_u32le(hdr + 16);
+    int ok = 0;
+    if (fseek(f, (long)toff, SEEK_SET) == 0) {
+        for (uint32_t i = 0; i < count; ++i) {
+            unsigned char e[16];
+            if (fread(e, 1, 16, f) != 16) break;
+            if (rd_u32le(e) == (uint32_t)CVM_SEC_SEAL) {
+                unsigned char s[4];
+                if (fseek(f, (long)rd_u32le(e + 4), SEEK_SET) == 0 &&
+                    fread(s, 1, 4, f) == 4 && rd_u32le(s) == CVM_SEAL_MAGIC)
+                    ok = 1;
+                break;
+            }
+        }
+    }
+    fclose(f);
+    return ok;
+}
+
 static int entry_cmp(const void* a, const void* b) {
     const entry_t* ea = (const entry_t*)a;
     const entry_t* eb = (const entry_t*)b;
@@ -264,7 +291,8 @@ static void scan_dir(menu_t* m) {
         path_join(full, sizeof(full), m->cur_dir, de->d_name);
         struct stat st;
         int is_dir = (stat(full, &st) == 0) && S_ISDIR(st.st_mode);
-        if (!is_dir && !has_cart_ext(de->d_name)) continue;   /* dirs + cart files */
+        /* Only dirs and SEALED cartridges (right extension + valid seal magic). */
+        if (!is_dir && (!has_cart_ext(de->d_name) || !cart_has_seal(full))) continue;
         entry_t* en = &m->entries[m->n_entries];
         snprintf(en->name, NAME_MAX_, "%s", de->d_name);
         en->is_dir = is_dir;
