@@ -20,7 +20,7 @@
 #define CH             (GLYPH * TEXT_SCALE)
 #define ROW_H          (CH + 4)
 
-typedef enum { SCR_MAIN, SCR_BROWSE, SCR_CONTROLS, SCR_JOYSTICK } screen_t;
+typedef enum { SCR_MAIN, SCR_BROWSE, SCR_CART, SCR_CONTROLS, SCR_JOYSTICK } screen_t;
 
 typedef struct {
     char name[NAME_MAX_];
@@ -55,9 +55,12 @@ struct menu {
     char      status[256];
     const char* joy_name;
 
-    int         meta_sel;   /* browse entry whose META is cached below (-1 = none) */
-    cart_meta_t meta;       /* author/controls of the focused cart, for the footer */
-    long        save_size;  /* size of the focused cart's <cart>.sav, -1 if none */
+    cart_meta_t meta;       /* title/author/controls of the cart on SCR_CART */
+
+    /* SCR_CART: the cart whose action menu is open. */
+    char        sel_cart[1300];   /* full path */
+    char        sel_name[256];    /* display filename */
+    long        sel_save;         /* its <cart>.sav size, -1 if none */
 };
 
 /* Size of a file in bytes, or -1 if it doesn't exist. */
@@ -286,6 +289,14 @@ static void scan_dir(menu_t* m) {
 #define MAIN_QUIT   5
 #define MAIN_COUNT  6
 
+/* Per-cart action screen (SCR_CART). */
+#define CART_LOAD    0
+#define CART_BACKUP  1
+#define CART_RESTORE 2
+#define CART_ERASE   3
+#define CART_BACK    4
+#define CART_COUNT   5
+
 static void enter_main(menu_t* m)     { m->screen = SCR_MAIN;     m->sel = 0; m->scroll = 0; }
 static void enter_controls(menu_t* m) { m->screen = SCR_CONTROLS; m->sel = 0; m->scroll = 0; m->capturing = 0; }
 static void enter_joystick(menu_t* m) { m->screen = SCR_JOYSTICK; m->sel = 0; m->scroll = 0; m->capturing = 0; }
@@ -294,6 +305,7 @@ static void enter_browse(menu_t* m)   { m->screen = SCR_BROWSE; m->capturing = 0
 static int rows_on_screen(const menu_t* m) {
     switch (m->screen) {
         case SCR_BROWSE:    return m->n_entries;
+        case SCR_CART:      return CART_COUNT;
         case SCR_CONTROLS:  return PAD_BTN_COUNT;
         case SCR_JOYSTICK:  return PAD_BTN_COUNT;
         default:            return MAIN_COUNT;
@@ -307,6 +319,8 @@ static void move_sel(menu_t* m, int dir) {
 }
 
 /* ---- activating the selected row --------------------------------------- */
+
+static void enter_cart(menu_t* m);   /* per-cart action screen (defined below) */
 
 static void activate_main(menu_t* m) {
     switch (m->sel) {
@@ -338,15 +352,8 @@ static void activate_browse(menu_t* m) {
         scan_dir(m);
         return;
     }
-    /* a .bin: load it. */
-    char full[1300];
-    path_join(full, sizeof(full), m->cur_dir, e->name);
-    if (m->host.load_cart(m->host.ud, full) == 0) {
-        snprintf(m->cfg->last_dir, sizeof(m->cfg->last_dir), "%s", m->cur_dir);
-        menu_close(m);
-    } else {
-        snprintf(m->status, sizeof(m->status), "Failed to load %s", e->name);
-    }
+    /* a cart: open its action menu (Load / save management), pad-driven. */
+    enter_cart(m);
 }
 
 /* ---- public API -------------------------------------------------------- */
@@ -389,38 +396,56 @@ void menu_close(menu_t* m) { m->open = 0; m->capturing = 0; }
 
 void menu_set_joy_name(menu_t* m, const char* name) { if (m) m->joy_name = name; }
 
-/* Resolve the focused cart's save / backup paths. Returns 0 on success. */
-static int focused_save_paths(menu_t* m, char* sav, size_t scap, char* bak, size_t bcap) {
-    if (m->screen != SCR_BROWSE) return -1;
-    if (m->sel <= 0 || m->sel >= m->n_entries || m->entries[m->sel].is_dir) return -1;
-    char full[1300];
-    path_join(full, sizeof full, m->cur_dir, m->entries[m->sel].name);
-    snprintf(sav, scap, "%s.sav", full);
-    if (bak) snprintf(bak, bcap, "%s.sav.bak", full);
-    return 0;
+/* ---- per-cart action screen (SCR_CART) — all pad-driven ---------------- */
+
+static void cart_save_paths(menu_t* m, char* sav, size_t sc, char* bak, size_t bc) {
+    snprintf(sav, sc, "%s.sav", m->sel_cart);
+    if (bak) snprintf(bak, bc, "%s.sav.bak", m->sel_cart);
 }
 
-/* Delete / export (backup) / import (restore) the focused cart's save. */
-static void delete_focused_save(menu_t* m) {
-    char sav[1320];
-    if (focused_save_paths(m, sav, sizeof sav, NULL, 0) != 0) return;
-    snprintf(m->status, sizeof m->status,
-             remove(sav) == 0 ? "Deleted save: %s" : "No save to delete",
-             m->entries[m->sel].name);
-    m->meta_sel = -1;
+/* Open the action menu for the cart currently focused in the browser. */
+static void enter_cart(menu_t* m) {
+    entry_t* e = &m->entries[m->sel];
+    path_join(m->sel_cart, sizeof m->sel_cart, m->cur_dir, e->name);
+    snprintf(m->sel_name, sizeof m->sel_name, "%s", e->name);
+    cart_read_meta(m->sel_cart, &m->meta);
+    char sav[1320]; cart_save_paths(m, sav, sizeof sav, NULL, 0);
+    m->sel_save = file_size(sav);
+    m->screen = SCR_CART;
+    m->sel = 0; m->scroll = 0;
+    m->status[0] = '\0';
 }
-static void export_focused_save(menu_t* m) {
+
+static void activate_cart(menu_t* m) {
     char sav[1320], bak[1340];
-    if (focused_save_paths(m, sav, sizeof sav, bak, sizeof bak) != 0) return;
-    snprintf(m->status, sizeof m->status,
-             copy_file(sav, bak) == 0 ? "Backed up save -> .sav.bak" : "No save to back up");
-}
-static void import_focused_save(menu_t* m) {
-    char sav[1320], bak[1340];
-    if (focused_save_paths(m, sav, sizeof sav, bak, sizeof bak) != 0) return;
-    snprintf(m->status, sizeof m->status,
-             copy_file(bak, sav) == 0 ? "Restored save from .sav.bak" : "No backup (.sav.bak) found");
-    m->meta_sel = -1;
+    cart_save_paths(m, sav, sizeof sav, bak, sizeof bak);
+    switch (m->sel) {
+        case CART_LOAD:
+            if (m->host.load_cart(m->host.ud, m->sel_cart) == 0) {
+                snprintf(m->cfg->last_dir, sizeof m->cfg->last_dir, "%s", m->cur_dir);
+                menu_close(m);
+            } else {
+                snprintf(m->status, sizeof m->status, "Failed to load %s", m->sel_name);
+            }
+            break;
+        case CART_BACKUP:
+            snprintf(m->status, sizeof m->status,
+                     copy_file(sav, bak) == 0 ? "Save backed up (.sav.bak)" : "No save to back up");
+            break;
+        case CART_RESTORE:
+            snprintf(m->status, sizeof m->status,
+                     copy_file(bak, sav) == 0 ? "Save restored from backup" : "No backup (.sav.bak) found");
+            m->sel_save = file_size(sav);
+            break;
+        case CART_ERASE:
+            snprintf(m->status, sizeof m->status,
+                     remove(sav) == 0 ? "Save erased" : "No save to erase");
+            m->sel_save = file_size(sav);
+            break;
+        case CART_BACK:
+            enter_browse(m);
+            break;
+    }
 }
 
 int menu_handle_event(menu_t* m, const SDL_Event* ev) {
@@ -460,9 +485,6 @@ int menu_handle_event(menu_t* m, const SDL_Event* ev) {
             case SDL_SCANCODE_RIGHT: goto activate;
             case SDL_SCANCODE_ESCAPE:
             case SDL_SCANCODE_LEFT:  goto back;
-            case SDL_SCANCODE_DELETE: delete_focused_save(m); return 1;
-            case SDL_SCANCODE_E:      export_focused_save(m); return 1;
-            case SDL_SCANCODE_I:      import_focused_save(m); return 1;
             default: return 1;
         }
     }
@@ -483,6 +505,7 @@ activate:
     switch (m->screen) {
         case SCR_MAIN:   activate_main(m);   break;
         case SCR_BROWSE: activate_browse(m); break;
+        case SCR_CART:   activate_cart(m);   break;
         case SCR_CONTROLS:
             m->capturing = 1; m->capture_btn = m->sel; break;
         case SCR_JOYSTICK:
@@ -491,30 +514,34 @@ activate:
     return 1;
 
 back:
-    if (m->screen == SCR_MAIN) {
-        if (m->has_cart) menu_close(m);    /* esc on main = resume (if a cart runs) */
-    } else {
-        enter_main(m);
+    switch (m->screen) {
+        case SCR_MAIN:   if (m->has_cart) menu_close(m); break;  /* esc=resume */
+        case SCR_CART:   enter_browse(m); break;                 /* back to the list */
+        default:         enter_main(m);   break;
     }
     return 1;
 }
 
 /* ---- rendering --------------------------------------------------------- */
 
-static const SDL_Color COL_DIM   = {  0,   0,   0, 200 };
-static const SDL_Color COL_PANEL = { 18,  20,  34, 255 };
-static const SDL_Color COL_BAR   = { 52,  84, 160, 255 };
-static const SDL_Color COL_TITLE = {255, 220, 120, 255 };
-static const SDL_Color COL_TEXT  = {220, 224, 235, 255 };
-static const SDL_Color COL_HILITE= {255, 255, 255, 255 };
-static const SDL_Color COL_HINT  = {140, 148, 170, 255 };
+static const SDL_Color COL_DIM    = {  0,   0,   0, 210 };
+static const SDL_Color COL_PANEL  = { 16,  18,  30, 248 };
+static const SDL_Color COL_BORDER = { 60,  72, 110, 255 };
+static const SDL_Color COL_BAR    = { 40,  64, 132, 255 };
+static const SDL_Color COL_ACCENT = {255, 196,  82, 255 };  /* underline / cursor / accent */
+static const SDL_Color COL_TITLE  = {255, 220, 120, 255 };
+static const SDL_Color COL_TEXT   = {214, 220, 232, 255 };
+static const SDL_Color COL_HILITE = {255, 255, 255, 255 };
+static const SDL_Color COL_HINT   = {130, 140, 165, 255 };
 
 static void draw_list(menu_t* m, const char* title, int x, int y, int w,
                       int n, const char* (*label)(menu_t*, int, char*, size_t)) {
     draw_text(m, x, y, COL_TITLE, title);
-    y += ROW_H + 6;
+    fill(m, x, y + CH + 4, w, 2, COL_ACCENT);          /* header underline rule */
+    y += ROW_H + 12;
 
-    int visible = (m->win_h - y - 40) / ROW_H;
+    int bottom = m->win_h - 56;                         /* leave room for footer */
+    int visible = (bottom - y) / ROW_H;
     if (visible < 1) visible = 1;
     if (m->sel < m->scroll)            m->scroll = m->sel;
     if (m->sel >= m->scroll + visible) m->scroll = m->sel - visible + 1;
@@ -522,13 +549,20 @@ static void draw_list(menu_t* m, const char* title, int x, int y, int w,
     for (int i = 0; i < visible && m->scroll + i < n; ++i) {
         int idx = m->scroll + i;
         int ry = y + i * ROW_H;
-        if (idx == m->sel) {
-            fill(m, x - 6, ry - 2, w + 12, ROW_H, COL_BAR);
+        int selected = (idx == m->sel);
+        if (selected) {
+            fill(m, x - 12, ry - 3, w + 20, ROW_H, COL_BAR);    /* selection bar */
+            fill(m, x - 12, ry - 3, 4, ROW_H, COL_ACCENT);      /* left accent */
+            draw_text(m, x - 2, ry, COL_ACCENT, ">");           /* cursor */
         }
         char buf[512];
         const char* s = label(m, idx, buf, sizeof(buf));
-        draw_text(m, x, ry, idx == m->sel ? COL_HILITE : COL_TEXT, s);
+        draw_text(m, x + (selected ? CW : 0), ry, selected ? COL_HILITE : COL_TEXT, s);
     }
+
+    /* scroll hint when there are more rows than fit */
+    if (m->scroll + visible < n)
+        draw_text(m, x + w - CW, y + visible * ROW_H - ROW_H, COL_HINT, "v");
 }
 
 static const char* lbl_main(menu_t* m, int i, char* buf, size_t cap) {
@@ -542,6 +576,18 @@ static const char* lbl_main(menu_t* m, int i, char* buf, size_t cap) {
         case MAIN_QUIT:   return "Quit";
     }
     (void)buf; return "";
+}
+
+static const char* lbl_cart(menu_t* m, int i, char* buf, size_t cap) {
+    (void)m; (void)buf; (void)cap;
+    switch (i) {
+        case CART_LOAD:    return "Load";
+        case CART_BACKUP:  return "Back up save";
+        case CART_RESTORE: return "Restore save (from backup)";
+        case CART_ERASE:   return "Erase save";
+        case CART_BACK:    return "Back";
+    }
+    return "";
 }
 
 static const char* lbl_browse(menu_t* m, int i, char* buf, size_t cap) {
@@ -573,16 +619,25 @@ static const char* lbl_joystick(menu_t* m, int i, char* buf, size_t cap) {
     return buf;
 }
 
+/* A panel rectangle with a 1px border. */
+static void panel(menu_t* m, int x, int y, int w, int h) {
+    fill(m, x, y, w, h, COL_PANEL);
+    fill(m, x, y, w, 1, COL_BORDER);
+    fill(m, x, y + h - 1, w, 1, COL_BORDER);
+    fill(m, x, y, 1, h, COL_BORDER);
+    fill(m, x + w - 1, y, 1, h, COL_BORDER);
+}
+
 void menu_render(menu_t* m) {
     if (!m->open) return;
 
     SDL_SetRenderDrawBlendMode(m->ren, SDL_BLENDMODE_BLEND);
     fill(m, 0, 0, m->win_w, m->win_h, COL_DIM);
 
-    int px = 40, py = 36, pw = m->win_w - 80, ph = m->win_h - 72;
-    fill(m, px, py, pw, ph, COL_PANEL);
+    int px = 40, py = 32, pw = m->win_w - 80, ph = m->win_h - 64;
+    panel(m, px, py, pw, ph);
 
-    int x = px + 28, y = py + 24, w = pw - 56;
+    int x = px + 28, y = py + 22, w = pw - 56;
 
     switch (m->screen) {
         case SCR_MAIN:
@@ -590,24 +645,15 @@ void menu_render(menu_t* m) {
             break;
         case SCR_BROWSE: {
             char title[1100];
-            snprintf(title, sizeof(title), "LOAD: %s", m->cur_dir);
+            snprintf(title, sizeof(title), "LOAD CARTRIDGE   %s", m->cur_dir);
             draw_list(m, title, x, y, w, m->n_entries, lbl_browse);
-            /* Refresh the focused cart's metadata (author/controls) for the
-             * footer; cached so we read the file only when the selection moves. */
-            if (m->sel > 0 && m->sel < m->n_entries && !m->entries[m->sel].is_dir) {
-                if (m->meta_sel != m->sel) {
-                    char full[1300], sp[1320];
-                    path_join(full, sizeof full, m->cur_dir, m->entries[m->sel].name);
-                    cart_read_meta(full, &m->meta);
-                    snprintf(sp, sizeof sp, "%s.sav", full);
-                    m->save_size = file_size(sp);
-                    m->meta_sel = m->sel;
-                }
-            } else {
-                m->meta_sel = -1;
-                m->meta.author[0] = m->meta.controls[0] = '\0';
-                m->save_size = -1;
-            }
+            break;
+        }
+        case SCR_CART: {
+            char title[320];
+            snprintf(title, sizeof title, "%s",
+                     m->meta.title[0] ? m->meta.title : m->sel_name);
+            draw_list(m, title, x, y, w, CART_COUNT, lbl_cart);
             break;
         }
         case SCR_CONTROLS:
@@ -622,27 +668,26 @@ void menu_render(menu_t* m) {
         }
     }
 
-    /* footer: focused-cart detail (browse) + status line + key hints */
+    /* footer: a rule, then (on the cart screen) its detail, status, and hints. */
     int fy = py + ph - CH - 14;
-    if (m->screen == SCR_BROWSE) {
-        if (m->save_size >= 0) {
-            char sv[96];
-            snprintf(sv, sizeof sv, "Save: %ld KB   (Del erases)",
-                     (m->save_size + 1023) / 1024);
-            draw_text(m, x, fy - ROW_H * 4, COL_TITLE, sv);
-        }
-        if (m->meta.author[0]) {
-            char ab[128];
-            snprintf(ab, sizeof ab, "by %s", m->meta.author);
-            draw_text(m, x, fy - ROW_H * 3, COL_HINT, ab);
-        }
-        if (m->meta.controls[0])
-            draw_text(m, x, fy - ROW_H * 2, COL_TEXT, m->meta.controls);
+    fill(m, x, fy - ROW_H - 6, w, 1, COL_BORDER);
+
+    if (m->screen == SCR_CART) {
+        char det[160];
+        if (m->meta.author[0]) { snprintf(det, sizeof det, "by %s", m->meta.author);
+                                 draw_text(m, x, fy - ROW_H * 4, COL_HINT, det); }
+        if (m->meta.controls[0]) draw_text(m, x, fy - ROW_H * 3, COL_TEXT, m->meta.controls);
+        snprintf(det, sizeof det, m->sel_save >= 0 ? "Save: %ld KB" : "Save: (none)",
+                 (m->sel_save + 1023) / 1024);
+        draw_text(m, x, fy - ROW_H * 2, COL_TITLE, det);
     }
-    if (m->status[0]) draw_text(m, x, fy - ROW_H, COL_TITLE, m->status);
+
+    if (m->status[0]) draw_text(m, x, fy - ROW_H + 2, COL_ACCENT, m->status);
+
     const char* hint =
-        (m->screen == SCR_MAIN) ? "Up/Down move   Enter select   Esc resume"
-      : (m->screen == SCR_BROWSE) ? "Enter load  E backup  I restore  Del erase  Esc back"
-      : "Enter rebind   Esc back";
+        (m->screen == SCR_MAIN)   ? "Up/Down  move      A/Enter  select   B/Esc  resume"
+      : (m->screen == SCR_BROWSE) ? "Up/Down  move      A/Enter  open      B/Esc  back"
+      : (m->screen == SCR_CART)   ? "Up/Down  move      A/Enter  choose    B/Esc  back"
+      : "A/Enter  rebind    B/Esc  back";
     draw_text(m, x, fy, COL_HINT, hint);
 }
