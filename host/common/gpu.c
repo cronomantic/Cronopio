@@ -380,13 +380,16 @@ void cron_gpu_bltm(cronopio_console_t* c, uint8_t* heap, int tm,
     const uint8_t*  tiles = heap + ib->offset;
     uint8_t* fb = fb_of(c, heap);
     int map_w_px = m->w * CRONOPIO_TILE_SIZE, map_h_px = m->h * CRONOPIO_TILE_SIZE;
+    if (map_w_px <= 0 || map_h_px <= 0) return;
+    /* The source coords wrap modulo the map size, so the tilemap tiles
+     * infinitely — a scrolling background never runs off into blank. */
     for (int j = 0; j < h; ++j) {
-        int py = sy + j;
-        if (py < 0 || py >= map_h_px) continue;
+        int py = (sy + j) % map_h_px;
+        if (py < 0) py += map_h_px;
         int cy = py / CRONOPIO_TILE_SIZE, ty = py % CRONOPIO_TILE_SIZE;
         for (int i = 0; i < w; ++i) {
-            int px = sx + i;
-            if (px < 0 || px >= map_w_px) continue;
+            int px = (sx + i) % map_w_px;
+            if (px < 0) px += map_w_px;
             int cx = px / CRONOPIO_TILE_SIZE, tx = px % CRONOPIO_TILE_SIZE;
             uint16_t cell = cells[cy * m->w + cx];
             if (cell == 0xFFFF) continue;            /* empty cell */

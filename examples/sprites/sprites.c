@@ -68,8 +68,10 @@ static void frame(void) {
     scroll++;
 
     cron_cls(0);
-    /* scrolling tilemap background (sx advances; map wraps via bltm bounds) */
-    cron_bltm(0, 0, 0, scroll & 255, (scroll >> 1) & 255, CRON_SCREEN_W, CRON_SCREEN_H, -1);
+    /* scrolling tilemap background — bltm wraps the source modulo the map
+     * size, so the full 512px map scrolls past endlessly. */
+    cron_bltm(0, 0, 0, scroll & (MAPW*TILE - 1), (scroll >> 1) & (MAPH*TILE - 1),
+              CRON_SCREEN_W, CRON_SCREEN_H, -1);
     /* the sprite, colour-keyed on 0, h-flipped when facing left */
     cron_blt(1, px, py, 0, 0, facing > 0 ? SPRSZ : -SPRSZ, SPRSZ, 0);
     /* HUD */

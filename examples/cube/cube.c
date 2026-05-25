@@ -77,7 +77,7 @@ static void frame(void) {
     for (int f = 0; f < 6; ++f)
         count += emit_face(batch + count, &mvp, f);
 
-    cron_polys(CRON_POLY_TEX | CRON_POLY_ZTEST, batch, count, 0, -1);
+    cron_polys(CRON_POLY_TEX | CRON_POLY_PERSP | CRON_POLY_ZTEST, batch, count, 0, -1);
 
     angle += 0.02f;
 }
