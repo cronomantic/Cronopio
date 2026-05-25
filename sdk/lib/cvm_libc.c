@@ -40,6 +40,8 @@
 #include <errno.h>
 #include <time.h>
 #include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 /* ---------------- errno ------------------------------------------------- */
 
@@ -1329,6 +1331,63 @@ int ungetc(int c, FILE *stream) {
     return c;
 }
 
+/* ---- POSIX fd-level I/O (open/read/write/close/lseek) ---------------------
+ * A thin fd table over fopen(): fds 0/1/2 are the standard streams (writes go
+ * to cron_log), fd N>=CVM_FD_BASE maps to a RAM-FS FILE*. Surfaced by ports
+ * that use low-level fd I/O (e.g. Quake's console log via open/write). */
+#define CVM_FD_BASE 3
+#define CVM_FD_MAX  16
+static FILE *g_fd[CVM_FD_MAX];
+
+static FILE *fd_file(int fd) {
+    int i = fd - CVM_FD_BASE;
+    if (i < 0 || i >= CVM_FD_MAX) return NULL;
+    return g_fd[i];
+}
+
+int open(const char *path, int flags, ...) {
+    const char *mode;
+    if (flags & O_WRONLY)    mode = (flags & O_APPEND) ? "ab" : "wb";
+    else if (flags & O_RDWR) mode = (flags & O_APPEND) ? "a+b"
+                                  : ((flags & O_TRUNC) ? "w+b" : "r+b");
+    else                     mode = "rb";
+    FILE *fp = fopen(path, mode);
+    if (!fp) return -1;
+    for (int i = 0; i < CVM_FD_MAX; i++) {
+        if (!g_fd[i]) { g_fd[i] = fp; return CVM_FD_BASE + i; }
+    }
+    fclose(fp);
+    return -1;
+}
+
+ssize_t write(int fd, const void *buf, size_t count) {
+    if (fd == 1 || fd == 2) { cron_log((const char *)buf, (int32_t)count); return (ssize_t)count; }
+    FILE *fp = fd_file(fd);
+    if (!fp) return -1;
+    return (ssize_t)fwrite(buf, 1, count, fp);
+}
+
+ssize_t read(int fd, void *buf, size_t count) {
+    FILE *fp = fd_file(fd);
+    if (!fp) return -1;
+    return (ssize_t)fread(buf, 1, count, fp);
+}
+
+int close(int fd) {
+    int i = fd - CVM_FD_BASE;
+    if (i < 0 || i >= CVM_FD_MAX || !g_fd[i]) return -1;
+    fclose(g_fd[i]);
+    g_fd[i] = NULL;
+    return 0;
+}
+
+off_t lseek(int fd, off_t offset, int whence) {
+    FILE *fp = fd_file(fd);
+    if (!fp) return -1;
+    if (fseek(fp, (long)offset, whence) != 0) return -1;
+    return (off_t)ftell(fp);
+}
+
 /* fscanf over a RAM-FS file. Supports the directives ports actually use for
  * text config: whitespace (skips a run), literal chars, %% , and
  * %[*][width](s|d|i|u|x|[set]) — enough for crispy's "%79s %99[^\n]" config
@@ -1457,6 +1516,8 @@ struct lconv *localeconv(void) {
 int feof(FILE *stream) { return stream ? stream->eofbit : 1; }
 
 int ferror(FILE *stream) { (void)stream; return 0; }
+
+void clearerr(FILE *stream) { if (stream) stream->eofbit = 0; }
 
 int remove(const char *path) {
     ramfs_load();

@@ -74,6 +74,7 @@ int   ungetc(int c, FILE *stream);
 #define getchar()      fgetc(stdin)
 int   feof(FILE *stream);
 int   ferror(FILE *stream);
+void  clearerr(FILE *stream);
 int   remove(const char *path);
 int   rename(const char *oldp, const char *newp);
 void  perror(const char *s);

@@ -17,4 +17,11 @@ int   access(const char *path, int mode);
 int   unlink(const char *path);
 char *getcwd(char *buf, size_t size);
 
+/* POSIX fd-level I/O (open() is in <fcntl.h>). A thin fd table over fopen() in
+ * cvm_libc.c — fds 0/1/2 are the standard streams, N>=3 map to RAM-FS files. */
+ssize_t read(int fd, void *buf, size_t count);
+ssize_t write(int fd, const void *buf, size_t count);
+int     close(int fd);
+off_t   lseek(int fd, off_t offset, int whence);
+
 #endif /* CVM_LIBC_UNISTD_H */
