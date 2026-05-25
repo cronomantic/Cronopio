@@ -568,7 +568,7 @@ void _cvm_assert_fail(const char *expr, const char *file, int line) {
  * filesystem (a small persisted "memory card", see the file-I/O section): every
  * fopen()'d file lives in RAM and is serialised to the host save blob on close.
  * Bundled read-only assets still come from the cartridge ROM (cron_rom). */
-struct _CVM_FILE { int slot; unsigned int pos; int writing; int eofbit; };
+struct _CVM_FILE { int slot; unsigned int pos; int writing; int eofbit; int is_rom; };
 /* The translator only serialises pointer globals when the initialiser is NULL
  * (it cannot relocate the address of another global, nor an inttoptr constant
  * expr). So the three standard streams are NULL pointers. That is fine here:
@@ -1177,6 +1177,13 @@ typedef struct { int used; char name[RAMFS_NAME]; uint8_t *data; uint32_t len, c
 static ramfile_t        g_fs[RAMFS_MAX];
 static struct _CVM_FILE g_fh[RAMFS_MAX];
 static int              g_fh_used[RAMFS_MAX];
+
+/* A cart can expose its baked --rom blob (cron_rom) as a single read-only file
+ * at a chosen path: fopen(path, "r"/"rb") then returns a ROM-backed handle whose
+ * reads come straight from ROM (only requested bytes copied — no duplication of
+ * a large blob). Used e.g. to serve a game data archive without a host FS. */
+static const char *g_rom_path;
+void cron_rom_mount(const char *path) { g_rom_path = path; }
 static int              g_fs_loaded = 0;
 
 static uint32_t cvm_rd32(const uint8_t *p) {
@@ -1265,6 +1272,19 @@ FILE *fopen(const char *path, const char *mode) {
     if (!path || !mode) { errno = ENOENT; return NULL; }
     ramfs_load();
     int write = (mode[0] == 'w' || mode[0] == 'a');
+
+    /* ROM-backed file: opened read-only, served from cron_rom(). */
+    if (!write && g_rom_path && cron_rom_size() > 0 &&
+        strcmp(path, g_rom_path) == 0) {
+        for (int i = 0; i < RAMFS_MAX; ++i) if (!g_fh_used[i]) {
+            g_fh_used[i] = 1;
+            g_fh[i].slot = -1; g_fh[i].pos = 0; g_fh[i].writing = 0;
+            g_fh[i].eofbit = 0; g_fh[i].is_rom = 1;
+            return &g_fh[i];
+        }
+        errno = ENOENT; return NULL;
+    }
+
     int slot  = ramfs_find(path);
     if (!write && slot < 0) { errno = ENOENT; return NULL; }
     if (write) {
@@ -1280,6 +1300,7 @@ FILE *fopen(const char *path, const char *mode) {
     g_fh[h].pos     = (mode[0] == 'a') ? g_fs[slot].len : 0;
     g_fh[h].writing = write;
     g_fh[h].eofbit  = 0;
+    g_fh[h].is_rom  = 0;
     return &g_fh[h];
 }
 
@@ -1293,11 +1314,14 @@ int fclose(FILE *stream) {
 
 size_t fread(void *ptr, size_t size, size_t nmemb, FILE *stream) {
     if (!stream || !ptr || size == 0 || nmemb == 0) return 0;
-    ramfile_t *f = &g_fs[stream->slot];
     size_t want = size * nmemb;
-    uint32_t avail = (stream->pos < f->len) ? (f->len - stream->pos) : 0;
+    const uint8_t *src;
+    uint32_t len;
+    if (stream->is_rom) { src = cron_rom(); len = cron_rom_size(); }
+    else { ramfile_t *f = &g_fs[stream->slot]; src = f->data; len = f->len; }
+    uint32_t avail = (stream->pos < len) ? (len - stream->pos) : 0;
     size_t got = want < avail ? want : avail;
-    if (got) { memcpy(ptr, f->data + stream->pos, got); stream->pos += (uint32_t)got; }
+    if (got) { memcpy(ptr, src + stream->pos, got); stream->pos += (uint32_t)got; }
     if (got < want) stream->eofbit = 1;
     return got / size;
 }
@@ -1316,9 +1340,9 @@ size_t fwrite(const void *ptr, size_t size, size_t nmemb, FILE *stream) {
 
 int fseek(FILE *stream, long offset, int whence) {
     if (!stream) return -1;
-    ramfile_t *f = &g_fs[stream->slot];
+    long len = stream->is_rom ? (long)cron_rom_size() : (long)g_fs[stream->slot].len;
     long base = (whence == SEEK_CUR) ? (long)stream->pos
-              : (whence == SEEK_END) ? (long)f->len : 0;
+              : (whence == SEEK_END) ? len : 0;
     long np = base + offset;
     if (np < 0) return -1;
     stream->pos = (uint32_t)np;
@@ -1335,10 +1359,12 @@ int fflush(FILE *stream) {
 
 char *fgets(char *s, int size, FILE *stream) {
     if (!stream || !s || size <= 0) return NULL;
-    ramfile_t *f = &g_fs[stream->slot];
+    const uint8_t *data; uint32_t len;
+    if (stream->is_rom) { data = cron_rom(); len = cron_rom_size(); }
+    else { ramfile_t *f = &g_fs[stream->slot]; data = f->data; len = f->len; }
     int i = 0;
-    while (i < size - 1 && stream->pos < f->len) {
-        char c = (char)f->data[stream->pos++];
+    while (i < size - 1 && stream->pos < len) {
+        char c = (char)data[stream->pos++];
         s[i++] = c;
         if (c == '\n') break;
     }
@@ -1349,9 +1375,11 @@ char *fgets(char *s, int size, FILE *stream) {
 
 int fgetc(FILE *stream) {
     if (!stream) return EOF;
-    ramfile_t *f = &g_fs[stream->slot];
-    if (stream->pos >= f->len) { stream->eofbit = 1; return EOF; }
-    return (int)f->data[stream->pos++];
+    const uint8_t *data; uint32_t len;
+    if (stream->is_rom) { data = cron_rom(); len = cron_rom_size(); }
+    else { ramfile_t *f = &g_fs[stream->slot]; data = f->data; len = f->len; }
+    if (stream->pos >= len) { stream->eofbit = 1; return EOF; }
+    return (int)data[stream->pos++];
 }
 
 int ungetc(int c, FILE *stream) {

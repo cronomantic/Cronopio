@@ -75,6 +75,12 @@ int   ungetc(int c, FILE *stream);
 int   feof(FILE *stream);
 int   ferror(FILE *stream);
 void  clearerr(FILE *stream);
+
+/* Expose the cart's baked --rom blob (cron_rom) as a single read-only file at
+ * `path`: a subsequent fopen(path, "rb") returns a ROM-backed handle whose
+ * reads come straight from ROM. Lets a cart serve a large baked data archive
+ * through the normal stdio file API without a host filesystem. */
+void  cron_rom_mount(const char *path);
 int   remove(const char *path);
 int   rename(const char *oldp, const char *newp);
 void  perror(const char *s);
