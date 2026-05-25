@@ -66,6 +66,12 @@ int   fflush(FILE *stream);
 char *fgets(char *s, int size, FILE *stream);
 int   fgetc(FILE *stream);
 int   ungetc(int c, FILE *stream);
+
+/* Standard getc/putc — defined as equivalents of fgetc/fputc (C allows them to
+ * be macros). getchar/putchar round out the set. */
+#define getc(stream)   fgetc(stream)
+#define putc(c, stream) fputc((c), (stream))
+#define getchar()      fgetc(stdin)
 int   feof(FILE *stream);
 int   ferror(FILE *stream);
 int   remove(const char *path);
