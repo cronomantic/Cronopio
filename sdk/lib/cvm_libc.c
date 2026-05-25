@@ -417,11 +417,41 @@ long atol(const char *s) { return strtol(s, NULL, 10); }
  * Net: by default this libc translates cleanly; atof/strtod are link-time
  * unresolved only if actually called, which flags the call sites for porting.*/
 #ifdef CVM_LIBC_ENABLE_F64
-double atof(const char *nptr) { (void)nptr; return 0; }
+/* Real string->double. f64 arithmetic (soft runtime) is fine here — these are
+ * cold paths (config/entity parsing). The whitespace test is written as ranges,
+ * not a char==... chain, so clang doesn't fold it into an i24 bit-test the
+ * translator rejects (same gotcha as fscanf's sf_isws). */
 double strtod(const char *nptr, char **endptr) {
-    if (endptr) *endptr = (char *)nptr;
-    return 0;
+    const char *s = nptr;
+    while ((*s >= 9 && *s <= 13) || *s == 32) s++;   /* leading whitespace */
+    int neg = 0;
+    if (*s == '+' || *s == '-') { neg = (*s == '-'); s++; }
+
+    double val = 0.0;
+    while (*s >= '0' && *s <= '9') { val = val * 10.0 + (double)(*s - '0'); s++; }
+    if (*s == '.') {
+        s++;
+        double frac = 0.1;
+        while (*s >= '0' && *s <= '9') {
+            val += (double)(*s - '0') * frac;
+            frac *= 0.1;
+            s++;
+        }
+    }
+    if (*s == 'e' || *s == 'E') {
+        s++;
+        int eneg = 0;
+        if (*s == '+' || *s == '-') { eneg = (*s == '-'); s++; }
+        int exp = 0;
+        while (*s >= '0' && *s <= '9') { exp = exp * 10 + (*s - '0'); s++; }
+        double p = 1.0;
+        for (int k = 0; k < exp; k++) p *= 10.0;
+        if (eneg) val /= p; else val *= p;
+    }
+    if (endptr) *endptr = (char *)s;
+    return neg ? -val : val;
 }
+double atof(const char *nptr) { return strtod(nptr, NULL); }
 #endif
 
 /* qsort — simple recursive quicksort with a median-of-first pivot, falling
