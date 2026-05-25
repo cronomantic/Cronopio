@@ -39,6 +39,7 @@ extern uint32_t  cvm_prof_len;
 extern uint64_t  cvm_prof_total;
 extern uint32_t  cvm_prof_watch;
 extern uint64_t *cvm_prof_caller;
+extern uint64_t  cvm_prof_cap;   /* debug: stop after N instructions (0 = off) */
 void cvm_profile_reset(uint32_t func_count);
 
 /* Virtual 60Hz clock — DOOM's state machine only advances when I_GetTime
@@ -118,6 +119,10 @@ int main(int argc, char** argv) {
     if (rc != CVM_OK && rc != CVM_E_SYSCALL_TRAP) {
         fprintf(stderr, "entry trap: %s\n", cvm_strerror(rc)); return 1;
     }
+
+    /* Debug: cap instructions per the env, set AFTER the (finite) entry so a
+     * runaway loop inside a frame breaks out and the dump shows the spinner. */
+    { const char* c = getenv("CVM_PROF_CAP"); if (c) cvm_prof_cap = strtoull(c, NULL, 0); }
 
     for (int f = 0; f < frames && !console.cart_exited; ++f) {
         if (f == warmup) cvm_profile_reset(img.func_count);  /* drop startup */
