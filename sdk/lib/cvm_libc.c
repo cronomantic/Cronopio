@@ -886,19 +886,23 @@ int cvm_vfmt(char *out, size_t cap, const char *fmt, va_list ap) {
         case 'f': case 'F':
         case 'g': case 'G':
         case 'e': case 'E': {
-            /* Floating-point conversions are WEAKENED. A varargs float is
-             * promoted to `double` (f64) by the C ABI, so reading it would
-             * require an f64 va_arg load — which the translator rejects. We
-             * therefore consume the 8-byte slot as two 32-bit words WITHOUT
-             * forming an f64 value, and emit a zero placeholder honouring the
-             * precision. DOOM almost never prints floats (uncapped framerate
-             * is disabled), so this is acceptable; see _sink_float() below for
-             * a real f32 formatter a cart can wire up once its float printing
-             * goes through a float-typed wrapper instead of varargs double. */
+            /* A varargs float is promoted to `double` (f64) by the C ABI.
+             * When the cart enables the f64 runtime we read the double and
+             * format it through the real f32 formatter (good enough for the
+             * small magnitudes Quake/DOOM print: volumes, gamma, fov, …). This
+             * also fixes Cvar_SetValue, which round-trips floats through
+             * sprintf("%f")/atof. Without f64 we cannot form the value, so we
+             * consume the 8-byte slot and emit a zero placeholder. */
+#ifdef CVM_LIBC_ENABLE_F64
+            double _dv = va_arg(ap, double);
+            _sink_float(&s, (float)_dv, width, prec, flags,
+                        (conv == 'F' || conv == 'G' || conv == 'E'));
+#else
             (void)va_arg(ap, unsigned);
             (void)va_arg(ap, unsigned);
             _sink_float(&s, 0.0f, width, prec, flags,
                         (conv == 'F' || conv == 'G' || conv == 'E'));
+#endif
             break;
         }
         case 'n': {
