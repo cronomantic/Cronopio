@@ -135,6 +135,8 @@ extern void     cvm_sys_cron_tspan       (int32_t y, int32_t x0, int32_t x1, con
 extern void     cvm_sys_cron_zbuf        (int32_t* zbuffer);
 extern void     cvm_sys_cron_zclear      (int32_t far);
 extern void     cvm_sys_cron_polys       (int32_t mode, const void* verts, int32_t count, int32_t arg, int32_t colkey);
+extern void     cvm_sys_cron_lightmap    (const uint8_t* ptr, int32_t w, int32_t h);
+extern void     cvm_sys_cron_colormap    (const uint8_t* ptr, int32_t levels);
 
 /* ---------------- User-facing aliases (the `cron_*` names) -------------- */
 
@@ -283,6 +285,7 @@ typedef struct {
     int32_t u, v;   /* texcoords, Q16.16 texels (CRON_POLY_TEX) */
     int32_t w;      /* perspective depth (CRON_POLY_PERSP) */
     int32_t c;      /* gouraud light/index (CRON_POLY_GOURAUD) */
+    int32_t lu, lv; /* lightmap texcoords, Q16.16 (CRON_POLY_LIGHTMAP) */
 } cron_vert_t;
 
 enum {
@@ -291,6 +294,7 @@ enum {
     CRON_POLY_TEX     = 1 << 1,   /* affine texture from image bank `arg`    */
     CRON_POLY_PERSP   = 1 << 2,   /* perspective-correct texture (uses .w)   */
     CRON_POLY_ZTEST   = 1 << 3,   /* depth test/write the bound z-buffer     */
+    CRON_POLY_LIGHTMAP = 1 << 4,  /* per-texel light: colormap[lm[lu,lv]*256 + tex] */
 };
 
 /* Bind a 320*240 int32 depth buffer (NULL disables). */
@@ -300,6 +304,12 @@ static inline void     cron_zclear       (int32_t far) { cvm_sys_cron_zclear(far
 /* Draw count/3 triangles. arg = flat colour, or image bank when TEX; colkey
  * = transparent texel or -1. */
 static inline void     cron_polys        (int32_t mode, const cron_vert_t* verts, int32_t count, int32_t arg, int32_t colkey) { cvm_sys_cron_polys(mode, verts, count, arg, colkey); }
+/* CRON_POLY_LIGHTMAP bindings (Quake-style per-texel light). lightmap: a small
+ * per-surface 8bpp grid, each byte a colormap row, sampled by the triangle's
+ * lu/lv (NULL/0 dims disables). colormap: a levels*256 table indexed
+ * [light*256 + texel] (e.g. Quake's 64x256). out = colormap[lm[lu,lv]*256+tex]. */
+static inline void     cron_lightmap     (const uint8_t* ptr, int32_t w, int32_t h) { cvm_sys_cron_lightmap(ptr, w, h); }
+static inline void     cron_colormap     (const uint8_t* ptr, int32_t levels)       { cvm_sys_cron_colormap(ptr, levels); }
 
 /* Video pointers — populated by cron_resolve_video(). Until that is called
  * they are NULL; reading/writing through them then would crash, so always

@@ -36,12 +36,13 @@ enum { CRON_ENV_OFF = 0, CRON_ENV_ATTACK, CRON_ENV_DECAY, CRON_ENV_SUSTAIN, CRON
  * memory: x, y (screen px), z (depth), u, v (texcoords Q16.16), w (1/clip-w
  * style depth for perspective), c (gouraud light/index). cron_polys draws
  * count/3 triangles. mode is a bitmask. */
-#define CRONOPIO_VERT_WORDS      7
+#define CRONOPIO_VERT_WORDS      9            /* x,y,z,u,v,w,c,lu,lv */
 #define CRONOPIO_VERT_BYTES      (CRONOPIO_VERT_WORDS * 4)
 #define CRONOPIO_POLY_GOURAUD    (1u << 0)   /* interpolate vertex c via cmap */
 #define CRONOPIO_POLY_TEX        (1u << 1)   /* affine texture from image bank */
 #define CRONOPIO_POLY_PERSP      (1u << 2)   /* perspective-correct (needs w)  */
 #define CRONOPIO_POLY_ZTEST      (1u << 3)   /* depth test/write the z-buffer  */
+#define CRONOPIO_POLY_LIGHTMAP   (1u << 4)   /* per-texel light: out = colormap[lm[lu,lv]*256 + tex] */
 
 #define CRONOPIO_FB_BYTES      (CRONOPIO_SCREEN_W * CRONOPIO_SCREEN_H)  /* 76 800 */
 #define CRONOPIO_PAL_BYTES     (CRONOPIO_PALETTE_SIZE * 4)              /* 128    */
@@ -151,6 +152,13 @@ typedef struct {
      * CRONOPIO_POLY_ZTEST triangles. Nearer = smaller z. */
     uint32_t zbuf_offset;
     int      zbuf_set;
+
+    /* CRONOPIO_POLY_LIGHTMAP: per-texel lighting like Quake. `lm` is a small
+     * per-surface light grid (8bpp, each byte a colormap ROW) sampled by the
+     * triangle's lu/lv; `colormap` is a levels*256 table (e.g. Quake's 64x256
+     * host_colormap) indexed [light*256 + texel]. Both in cart memory. */
+    uint32_t lm_offset;   int lm_w, lm_h, lm_set;
+    uint32_t colormap_offset; int colormap_levels, colormap_set;
 
     /* audio */
     cron_voice_t       voices[CRONOPIO_AUDIO_CHANS];
@@ -360,6 +368,12 @@ void cron_gpu_tspan(cronopio_console_t* c, uint8_t* heap, int y, int x0, int x1,
 void cron_gpu_zbuf  (cronopio_console_t* c, uint32_t offset, int set);
 /* Fill the bound depth buffer with `far` (typically INT32_MAX). */
 void cron_gpu_zclear(cronopio_console_t* c, uint8_t* heap, int32_t far);
+
+/* CRONOPIO_POLY_LIGHTMAP bindings. lightmap: a per-surface 8bpp light grid
+ * (each byte a colormap row); set=0 disables. colormap: a levels*256 table
+ * indexed [light*256 + texel]; set=0 disables (falls back to cmap/raw). */
+void cron_gpu_lightmap(cronopio_console_t* c, uint32_t offset, int w, int h, int set);
+void cron_gpu_colormap(cronopio_console_t* c, uint32_t offset, int levels, int set);
 
 /* Draw count/3 triangles from a vertex array at verts_off (CRONOPIO_VERT_BYTES
  * each). mode is a CRONOPIO_POLY_* bitmask. arg = flat colour index, or the

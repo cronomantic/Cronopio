@@ -392,6 +392,24 @@ static int sys_zbuf(struct cvm_image *img, int32_t *r, void *ud) {
 static int sys_zclear(struct cvm_image *img, int32_t *r, void *ud) {
     (void)img; cron_gpu_zclear(X->c, HEAP, r[0]); r[0] = 0; return 0;
 }
+static int sys_lightmap(struct cvm_image *img, int32_t *r, void *ud) {
+    uint32_t ptr = (uint32_t)r[0]; int w = (int)r[1], h = (int)r[2];
+    if (ptr == 0 || w <= 0 || h <= 0 ||
+        (uint64_t)ptr + (uint64_t)w * h > img->mem_size) {
+        cron_gpu_lightmap(X->c, 0, 0, 0, 0); r[0] = 0; return 0;
+    }
+    cron_gpu_lightmap(X->c, ptr, w, h, 1);
+    r[0] = 0; return 0;
+}
+static int sys_colormap(struct cvm_image *img, int32_t *r, void *ud) {
+    uint32_t ptr = (uint32_t)r[0]; int levels = (int)r[1];
+    if (ptr == 0 || levels <= 0 ||
+        (uint64_t)ptr + (uint64_t)levels * 256u > img->mem_size) {
+        cron_gpu_colormap(X->c, 0, 0, 0); r[0] = 0; return 0;
+    }
+    cron_gpu_colormap(X->c, ptr, levels, 1);
+    r[0] = 0; return 0;
+}
 static int sys_polys(struct cvm_image *img, int32_t *r, void *ud) {
     GUARD;
     uint32_t voff  = (uint32_t)r[1];
@@ -713,6 +731,8 @@ static const entry_t kSyscalls[] = {
     { "cvm_sys_cron_tspan",        sys_tspan        },
     /* 3D triangle submission */
     { "cvm_sys_cron_zbuf",         sys_zbuf         },
+    { "cvm_sys_cron_lightmap",     sys_lightmap     },
+    { "cvm_sys_cron_colormap",     sys_colormap     },
     { "cvm_sys_cron_zclear",       sys_zclear       },
     { "cvm_sys_cron_polys",        sys_polys        },
 };

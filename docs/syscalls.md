@@ -228,20 +228,31 @@ typedef struct {
     int32_t u, v;   /* texcoords, Q16.16 texels (TEX) */
     int32_t w;      /* perspective depth (PERSP) */
     int32_t c;      /* gouraud light/index (GOURAUD) */
+    int32_t lu, lv; /* lightmap texcoords, Q16.16 (LIGHTMAP) */
 } cron_vert_t;      /* CRON_POLY_* mode flags select which fields are used */
 ```
 
 | Name                  | Signature (SDK)                                                  | Notes                                                                |
 |-----------------------|-----------------------------------------------------------------|----------------------------------------------------------------------|
-| `cron_polys`          | `void(mode, const cron_vert_t* verts, count, arg, colkey)`     | Draw `count/3` triangles. **mode** is a bitmask: `FLAT` (solid `arg`), `GOURAUD` (interpolate `.c` through the cmap), `TEX` (affine texture from image bank `arg`, `colkey` transparent), `PERSP` (perspective-correct, uses `.w`), `ZTEST` (depth test/write). |
+| `cron_polys`          | `void(mode, const cron_vert_t* verts, count, arg, colkey)`     | Draw `count/3` triangles. **mode** is a bitmask: `FLAT` (solid `arg`), `GOURAUD` (interpolate `.c` through the cmap), `TEX` (affine texture from image bank `arg`, `colkey` transparent), `PERSP` (perspective-correct, uses `.w`), `ZTEST` (depth test/write), `LIGHTMAP` (per-texel light, below). |
 | `cron_zbuf`           | `void(int32_t* zbuffer)`                                        | Bind a 320×240 i32 depth buffer in cart memory; NULL disables (painter's-only). |
 | `cron_zclear`         | `void(int32_t far)`                                             | Fill the bound z-buffer with `far` (e.g. `0x7FFFFFFF`).              |
+| `cron_lightmap`       | `void(const u8* ptr, i32 w, i32 h)`                            | Bind a per-surface light grid (8bpp, each byte a colormap *row*) for `LIGHTMAP` draws; NULL/0 disables |
+| `cron_colormap`       | `void(const u8* ptr, i32 levels)`                              | Bind a `levels*256` colormap indexed `[light*256 + texel]` (e.g. Quake's 64×256); NULL/0 disables |
 
 Like the rasteriser accelerators, triangles honour the clip rect (viewport)
 but ignore camera and the draw palette; the active `cmap` shades Gouraud and
 textured spans (DOOM-style per-triangle light). Texture coords wrap (repeat)
 modulo the image-bank dimensions. Back-face culling is the cart's job (a 2D
 screen-space cross product); the rasteriser fills either winding.
+
+**`LIGHTMAP`** (with `TEX`) is Quake-style per-texel lighting: each pixel
+samples the texture (index `t`) *and* the bound light grid via `.lu/.lv`
+(perspective-correct when `PERSP` is set, like `.u/.v`) for a light row `l`,
+then writes `colormap[l*256 + t]`. Bind the grid with `cron_lightmap` (rebind
+per surface) and the table once with `cron_colormap`. This keeps a full
+per-texel lightmap (not the per-triangle `cmap` shade) on the indexed
+framebuffer — the offload path for Quake's lightmapped world.
 
 ## Cartridge ROM
 

@@ -16,12 +16,13 @@
 
 #include <stdint.h>
 
-typedef struct { int32_t x, y, z, u, v, w, c; } vert_t;
+typedef struct { int32_t x, y, z, u, v, w, c, lu, lv; } vert_t;
 
 static void rd_vert(const uint8_t* p, vert_t* o) {
     const int32_t* w = (const int32_t*)p;
     o->x = w[0]; o->y = w[1]; o->z = w[2];
     o->u = w[3]; o->v = w[4]; o->w = w[5]; o->c = w[6];
+    o->lu = w[7]; o->lv = w[8];
 }
 
 /* Twice the signed area of triangle (a,b,c); >0 for one winding, <0 the
@@ -40,6 +41,14 @@ void cron_gpu_zclear(cronopio_console_t* c, uint8_t* heap, int32_t far) {
     int32_t* zb = (int32_t*)(heap + c->zbuf_offset);
     int n = CRONOPIO_SCREEN_W * CRONOPIO_SCREEN_H;
     for (int i = 0; i < n; ++i) zb[i] = far;
+}
+
+void cron_gpu_lightmap(cronopio_console_t* c, uint32_t offset, int w, int h, int set) {
+    c->lm_offset = offset; c->lm_w = w; c->lm_h = h; c->lm_set = set;
+}
+
+void cron_gpu_colormap(cronopio_console_t* c, uint32_t offset, int levels, int set) {
+    c->colormap_offset = offset; c->colormap_levels = levels; c->colormap_set = set;
 }
 
 void cron_gpu_polys(cronopio_console_t* c, uint8_t* heap, int mode,
@@ -62,6 +71,18 @@ void cron_gpu_polys(cronopio_console_t* c, uint8_t* heap, int mode,
     }
     int persp   = (mode & CRONOPIO_POLY_PERSP) && (mode & CRONOPIO_POLY_TEX);
     int gouraud = (mode & CRONOPIO_POLY_GOURAUD);
+
+    /* Per-texel lighting (Quake-style): sample a small per-surface light grid
+     * and remap through a levels*256 colormap. Needs TEX + both bindings. */
+    const uint8_t* lm = 0; int lmw = 0, lmh = 0;
+    const uint8_t* colormap = 0; int cmlevels = 0;
+    int lightmap = (mode & CRONOPIO_POLY_LIGHTMAP) && (mode & CRONOPIO_POLY_TEX)
+                 && c->lm_set && c->colormap_set;
+    if (lightmap) {
+        lm = heap + c->lm_offset; lmw = c->lm_w; lmh = c->lm_h;
+        colormap = heap + c->colormap_offset; cmlevels = c->colormap_levels;
+        if (lmw <= 0 || lmh <= 0 || cmlevels <= 0) lightmap = 0;
+    }
 
     const int CX0 = c->draw.clip_x0, CY0 = c->draw.clip_y0;
     const int CX1 = c->draw.clip_x1, CY1 = c->draw.clip_y1;
@@ -87,12 +108,17 @@ void cron_gpu_polys(cronopio_console_t* c, uint8_t* heap, int mode,
         /* Perspective: pre-divide texcoords by w per vertex, interpolate
          * u/w, v/w, 1/w linearly, divide per pixel. */
         float iw0=0, iw1=0, iw2=0, uo0=0, uo1=0, uo2=0, vo0=0, vo1=0, vo2=0;
+        float luo0=0, luo1=0, luo2=0, lvo0=0, lvo1=0, lvo2=0;
         if (persp) {
             iw0 = a.w ? 1.0f / (float)a.w : 0.0f;
             iw1 = b.w ? 1.0f / (float)b.w : 0.0f;
             iw2 = d.w ? 1.0f / (float)d.w : 0.0f;
             uo0 = a.u * iw0; uo1 = b.u * iw1; uo2 = d.u * iw2;
             vo0 = a.v * iw0; vo1 = b.v * iw1; vo2 = d.v * iw2;
+            if (lightmap) {
+                luo0 = a.lu * iw0; luo1 = b.lu * iw1; luo2 = d.lu * iw2;
+                lvo0 = a.lv * iw0; lvo1 = b.lv * iw1; lvo2 = d.lv * iw2;
+            }
         }
 
         for (int py = miny; py <= maxy; ++py) {
@@ -117,15 +143,24 @@ void cron_gpu_polys(cronopio_console_t* c, uint8_t* heap, int mode,
 
                 int col;
                 if (tex) {
-                    float uf, vf;
+                    float uf, vf, luf = 0, lvf = 0;
                     if (persp) {
                         float iwp = bA*iw0 + bB*iw1 + bC*iw2;
                         if (iwp == 0.0f) continue;
-                        uf = (bA*uo0 + bB*uo1 + bC*uo2) / iwp;
-                        vf = (bA*vo0 + bB*vo1 + bC*vo2) / iwp;
+                        float rw = 1.0f / iwp;
+                        uf = (bA*uo0 + bB*uo1 + bC*uo2) * rw;
+                        vf = (bA*vo0 + bB*vo1 + bC*vo2) * rw;
+                        if (lightmap) {
+                            luf = (bA*luo0 + bB*luo1 + bC*luo2) * rw;
+                            lvf = (bA*lvo0 + bB*lvo1 + bC*lvo2) * rw;
+                        }
                     } else {
                         uf = bA*a.u + bB*b.u + bC*d.u;
                         vf = bA*a.v + bB*b.v + bC*d.v;
+                        if (lightmap) {
+                            luf = bA*a.lu + bB*b.lu + bC*d.lu;
+                            lvf = bA*a.lv + bB*b.lv + bC*d.lv;
+                        }
                     }
                     int tu = ((int)uf) >> 16;
                     int tv = ((int)vf) >> 16;
@@ -133,7 +168,17 @@ void cron_gpu_polys(cronopio_console_t* c, uint8_t* heap, int mode,
                     tv %= th; if (tv < 0) tv += th;
                     uint8_t s = tex[tv * tw + tu];
                     if (colkey >= 0 && s == (uint8_t)colkey) continue;
-                    col = cm ? cm[s] : s;
+                    if (lightmap) {
+                        int lx = ((int)luf) >> 16;
+                        int ly = ((int)lvf) >> 16;
+                        if (lx < 0) lx = 0; else if (lx >= lmw) lx = lmw - 1;
+                        if (ly < 0) ly = 0; else if (ly >= lmh) ly = lmh - 1;
+                        int li = lm[ly * lmw + lx];
+                        if (li >= cmlevels) li = cmlevels - 1;
+                        col = colormap[li * 256 + s];
+                    } else {
+                        col = cm ? cm[s] : s;
+                    }
                 } else if (gouraud) {
                     int ci = (int)(bA*a.c + bB*b.c + bC*d.c) & 0xFF;
                     col = cm ? cm[ci] : ci;
