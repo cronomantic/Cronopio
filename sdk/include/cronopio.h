@@ -173,11 +173,16 @@ static inline void     cron_pcm_params  (int32_t v, int32_t vol, int32_t pan) { 
 static inline void     cron_env         (int32_t v, int32_t a_ms, int32_t d_ms, int32_t sustain, int32_t r_ms) { cvm_sys_cron_env(v, a_ms, d_ms, sustain, r_ms); }
 static inline void     cron_note_off    (int32_t v)                       { cvm_sys_cron_note_off(v); }
 
+/* Host audio playback rate (Hz). The PCM stream and sample voices are played
+ * at this fixed rate, so a cart that renders or resamples its own audio
+ * (cron_stream) must target it. */
+#define CRON_AUDIO_HZ 22050
+
 /* Streaming PCM: push `nframes` 16-bit signed *stereo* frames (interleaved
- * L,R) into the host's playback ring; returns frames actually queued.
- * cron_stream_free() returns how many frames the ring can accept now. Use
- * it for music a cart renders itself — e.g. a DOOM MUS through the port's
- * own OPL2 emulator — or any streamed audio. */
+ * L,R) into the host's playback ring; returns frames actually queued. Frames
+ * play at CRON_AUDIO_HZ. cron_stream_free() returns how many frames the ring
+ * can accept now. Use it for music a cart renders itself — e.g. a DOOM MUS
+ * through the port's own OPL2 emulator — or any streamed audio. */
 static inline int32_t  cron_stream       (const int16_t* frames, int32_t nframes) { return cvm_sys_cron_stream(frames, nframes); }
 static inline int32_t  cron_stream_free  (void)                           { return cvm_sys_cron_stream_free(); }
 
