@@ -13,6 +13,7 @@
 #include "syscalls.h"
 
 #include "cvm.h"
+#include "cron_music.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -518,6 +519,29 @@ static int sys_midi_volume(struct cvm_image *img, int32_t *r, void *ud) {
     return 0;
 }
 
+/* --- streaming OGG music (cron_music.c) --------------------------------- */
+
+static int sys_music(struct cvm_image *img, int32_t *r, void *ud) {
+    ctx_t *x = (ctx_t*)ud;
+    uint32_t off = (uint32_t)r[0], len = (uint32_t)r[1];
+    if (!x->c->heap || (uint64_t)off + len > img->mem_size) { r[0] = -1; return 0; }
+    cron_music_play(x->c->music, x->c->heap + off, (int)len, (int)r[2]);
+    r[0] = 0;
+    return 0;
+}
+static int sys_music_stop(struct cvm_image *img, int32_t *r, void *ud) {
+    (void)img;
+    cron_music_stop(((ctx_t*)ud)->c->music);
+    r[0] = 0;
+    return 0;
+}
+static int sys_music_volume(struct cvm_image *img, int32_t *r, void *ud) {
+    (void)img;
+    cron_music_set_volume(((ctx_t*)ud)->c->music, (int)r[0]);
+    r[0] = 0;
+    return 0;
+}
+
 /* ------ input ----------------------------------------------------------- */
 
 static int sys_pad(struct cvm_image *img, int32_t *r, void *ud) {
@@ -646,6 +670,9 @@ static const entry_t kSyscalls[] = {
     { "cvm_sys_cron_midi_send",      sys_midi_send      },
     { "cvm_sys_cron_midi_reset",     sys_midi_reset     },
     { "cvm_sys_cron_midi_volume",    sys_midi_volume    },
+    { "cvm_sys_cron_music",          sys_music          },
+    { "cvm_sys_cron_music_stop",     sys_music_stop     },
+    { "cvm_sys_cron_music_volume",   sys_music_volume   },
     /* input */
     { "cvm_sys_cron_pad",          sys_pad          },
     { "cvm_sys_cron_pad_pressed",  sys_pad_pressed  },

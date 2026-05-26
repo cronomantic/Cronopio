@@ -106,6 +106,19 @@ load their own `.sf2`. See [audio.md](audio.md) Layer 4.
 | `cvm_sys_cron_sf2_free`       | `void(i32 handle)`                   | Free a cart-loaded SoundFont                   |
 | `cvm_sys_cron_midi_soundfont` | `void(i32 handle)`                   | Select active bank (0 = default BIOS bank)     |
 
+### Music (streaming OGG)
+
+Host-native Ogg Vorbis playback (vendored stb_vorbis). A cart hands over the
+bytes of an `.ogg` (e.g. a track read from its ROM/pak); the host copies them,
+decodes + resamples to the output rate, and mixes the music under the SFX. One
+track plays at a time. See [audio.md](audio.md) Layer 4.
+
+| Name                       | Signature                              | Notes                                          |
+|----------------------------|----------------------------------------|------------------------------------------------|
+| `cvm_sys_cron_music`       | `void(const void* ogg, i32 len, i32 loop)` | Decode + play `len` bytes of ogg; loop!=0 restarts; replaces any current track |
+| `cvm_sys_cron_music_stop`  | `void()`                               | Stop and release the current track             |
+| `cvm_sys_cron_music_volume`| `void(i32 vol)`                        | Music volume 0..256 (Q8)                       |
+
 ## Input
 
 | Name                          | Signature                       | Notes                                    |

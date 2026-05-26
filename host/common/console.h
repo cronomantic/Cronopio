@@ -157,6 +157,7 @@ typedef struct {
     cron_sample_bank_t samples[CRONOPIO_SAMPLE_SLOTS];
     int                master_vol_q8;            /* 0..256 */
     void*              synth;                     /* MIDI+SoundFont synth (midisynth.c, opaque cron_synth*) */
+    void*              music;                     /* streaming OGG music (cron_music.c, opaque) */
 
     /* Streaming PCM ring (16-bit stereo). head written by the cart thread
      * (cron_stream), tail by the audio thread (mixer); single-producer /

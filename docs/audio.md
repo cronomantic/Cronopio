@@ -89,10 +89,31 @@ it becomes active only via the ring `SELECT` the mixer processes.
 implemented, and the low-pass filter is basic. The base synthesis (samples,
 ADSR envelopes, GM presets) is faithful enough for game music.
 
+## Layer 4 — music: streaming OGG (recorded soundtracks)
+
+For music that is recorded audio rather than a sequence — e.g. Quake's CD
+soundtrack — the cart hands the host the bytes of an Ogg Vorbis file and the
+host decodes it (vendored stb_vorbis, public domain), resamples to the output
+rate (`CRON_AUDIO_HZ`, 22050), and mixes it under the SFX. The cart reads the
+`.ogg` from its own ROM/pak and passes the buffer; the host copies it, so the
+cart may free it immediately. One track plays at a time; a new `cron_music`
+replaces the previous. Near-zero VM cost (the host does the decoding).
+
+| Name                 | Signature                                  | Notes |
+|----------------------|--------------------------------------------|-------|
+| `cron_music`         | `void(const void* ogg, i32 len, i32 loop)` | Decode + play `len` bytes of ogg; `loop`!=0 restarts at the end |
+| `cron_music_stop`    | `void()`                                   | Stop and release the current track |
+| `cron_music_volume`  | `void(i32 vol)`                            | Music volume 0..256 (Q8) |
+
+**Threading.** Same SPSC discipline as the synth: the cart thread opens a track
+and publishes it through an atomic slot; the audio thread adopts it and is the
+only thread that touches the (non-thread-safe) decoder or frees a track.
+
 ## Syscall range
 
 `0x200–0x2FF` — extended audio. `0x200` block = Layer 1 (samples + voices)
-and SFX triggers; `0x240` block = MIDI + SoundFont synth (Layer 3).
+and SFX triggers + streaming PCM; `0x240` block = MIDI + SoundFont synth
+(Layer 3) and streaming OGG music (Layer 4).
 
 ## DOOM audio
 
@@ -113,8 +134,10 @@ and SFX triggers; `0x240` block = MIDI + SoundFont synth (Layer 3).
 ## Status
 
 Implemented: Layer 1 voices (synth + PCM + ADSR, sample banks), SFX as direct
-triggers, and the **MIDI + SoundFont synth (Layer 3)**
-with a default GM "BIOS" bank and cart-loadable `.sf2`. The DOOM port uses all
-of it: music via MUS→MIDI→`cron_midi_send` (host synth), SFX via DMX `DS*` →
-`cron_sample_u8`+`cron_pcm` — both working, with `cron_pcm_params` applying
-DOOM's per-tic 3D repositioning (volume/pan) to in-flight sounds.
+triggers, the **MIDI + SoundFont synth (Layer 3)** with a default GM "BIOS" bank
+and cart-loadable `.sf2`, and **streaming OGG music (Layer 4)**. The DOOM port
+uses MUS→MIDI→`cron_midi_send` (host synth) for music and DMX `DS*` →
+`cron_sample_u8`+`cron_pcm` for SFX — both working, with `cron_pcm_params`
+applying DOOM's per-tic 3D repositioning (volume/pan) to in-flight sounds. The
+Quake port streams its mixed SFX through `cron_stream` and plays its recorded
+soundtrack as `.ogg` through `cron_music` (Layer 4).

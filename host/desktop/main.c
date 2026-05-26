@@ -15,6 +15,7 @@
  * Emscripten's requestAnimationFrame-driven callback can share it. */
 
 #include "console.h"
+#include "cron_music.h"
 #include "syscalls.h"
 #include "cvm.h"
 #include "hostcfg.h"
@@ -258,6 +259,7 @@ static int app_load_cart(void* ud, const char* path) {
     /* Full console reset: drop the old synth, re-init (reloads the BIOS SF2),
      * then re-establish the host hooks console_init clears. */
     cron_synth_destroy(a->console->synth);
+    cron_music_destroy(a->console->music);
     cronopio_save_free(a->console);   /* free the outgoing cart's save buffer */
     cronopio_console_init(a->console);
     a->console->boot_ms    = SDL_GetTicks();
@@ -481,6 +483,7 @@ int main(int argc, char** argv) {
 
     if (app.audio_dev) SDL_CloseAudioDevice(app.audio_dev);
     cron_synth_destroy(console.synth);
+    cron_music_destroy(console.music);
     SDL_DestroyTexture(tex);
     SDL_DestroyRenderer(ren);
     SDL_DestroyWindow(win);

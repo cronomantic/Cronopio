@@ -1,4 +1,5 @@
 #include "console.h"
+#include "cron_music.h"
 
 #include <string.h>
 #include <stdlib.h>
@@ -51,6 +52,9 @@ void cronopio_console_init(cronopio_console_t* c) {
     c->synth = cron_synth_create();
     if (c->synth && cron_bios_sf2_len > 0)
         cron_synth_load_default_mem(c->synth, cron_bios_sf2, (int)cron_bios_sf2_len);
+
+    /* Streaming OGG music decoder (host-side; a cart hands it ogg bytes). */
+    c->music = cron_music_create();
 }
 
 void cronopio_console_begin_frame(cronopio_console_t* c) {
@@ -148,6 +152,12 @@ void cronopio_console_mix(cronopio_console_t* c, int16_t* dst, int frames) {
     int synth_frames = frames > CRONOPIO_STREAM_FRAMES ? CRONOPIO_STREAM_FRAMES : frames;
     if (c->synth) cron_synth_render(c->synth, synth_buf, synth_frames);
 
+    /* Render the streaming OGG music block up front too (decodes + adopts any
+     * track the cart published, on this audio thread). */
+    static int16_t music_buf[CRONOPIO_STREAM_FRAMES * 2];
+    int music_frames = frames > CRONOPIO_STREAM_FRAMES ? CRONOPIO_STREAM_FRAMES : frames;
+    if (c->music) cron_music_render(c->music, music_buf, music_frames);
+
     for (int i = 0; i < frames; ++i) {
         int32_t mix_l = 0, mix_r = 0;
         for (int vi = 0; vi < CRONOPIO_AUDIO_CHANS; ++vi) {
@@ -218,6 +228,12 @@ void cronopio_console_mix(cronopio_console_t* c, int16_t* dst, int frames) {
         if (c->synth && i < synth_frames) {
             mix_l += synth_buf[i * 2];
             mix_r += synth_buf[i * 2 + 1];
+        }
+
+        /* Add the streaming OGG music for this frame. */
+        if (c->music && i < music_frames) {
+            mix_l += music_buf[i * 2];
+            mix_r += music_buf[i * 2 + 1];
         }
 
         mix_l = (mix_l * c->master_vol_q8) >> 8;
