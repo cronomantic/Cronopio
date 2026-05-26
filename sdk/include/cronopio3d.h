@@ -36,6 +36,7 @@ typedef struct {
     cron_vec4 pos;     /* clip space (post-MVP, pre-divide) */
     float     u, v;    /* texels */
     float     light;   /* gouraud light/index */
+    float     lu, lv;  /* lightmap texels (CRON_POLY_LIGHTMAP) */
 } cron_cvert;
 
 /* ---- vec3 (inline; scalarised by SROA) -------------------------------- */
@@ -205,6 +206,8 @@ static void cron_cvert_lerp(cron_cvert* o, const cron_cvert* a, const cron_cvert
     o->u     = a->u     + (b->u     - a->u)     * t;
     o->v     = a->v     + (b->v     - a->v)     * t;
     o->light = a->light + (b->light - a->light) * t;
+    o->lu    = a->lu    + (b->lu    - a->lu)    * t;
+    o->lv    = a->lv    + (b->lv    - a->lv)    * t;
 }
 
 /* Clip triangle `in[3]` against the near plane (z + w >= 0). Writes the
@@ -252,6 +255,8 @@ static void cron_to_screen(cron_vert_t* o, const cron_cvert* cv) {
     o->v = cvm_f2i_sat_s(cv->v * 65536.0f);
     o->w = cvm_f2i_sat_s(cv->pos.w * 65536.0f);
     o->c = cvm_f2i_sat_s(cv->light);
+    o->lu = cvm_f2i_sat_s(cv->lu * 65536.0f);
+    o->lv = cvm_f2i_sat_s(cv->lv * 65536.0f);
 }
 
 /* High-level: transform one source triangle by `mvp`, near-clip it, and
@@ -262,9 +267,9 @@ static int cron_emit_tri(cron_vert_t* out, const cron_mat4* mvp,
                          cron_vec3 p0, cron_vec3 p1, cron_vec3 p2,
                          const cron_cvert* attr /* attr[3]: only u,v,light read */) {
     cron_cvert tri[3], clipped[6];
-    cron_mat_point(&tri[0].pos, mvp, p0); tri[0].u=attr[0].u; tri[0].v=attr[0].v; tri[0].light=attr[0].light;
-    cron_mat_point(&tri[1].pos, mvp, p1); tri[1].u=attr[1].u; tri[1].v=attr[1].v; tri[1].light=attr[1].light;
-    cron_mat_point(&tri[2].pos, mvp, p2); tri[2].u=attr[2].u; tri[2].v=attr[2].v; tri[2].light=attr[2].light;
+    cron_mat_point(&tri[0].pos, mvp, p0); tri[0].u=attr[0].u; tri[0].v=attr[0].v; tri[0].light=attr[0].light; tri[0].lu=attr[0].lu; tri[0].lv=attr[0].lv;
+    cron_mat_point(&tri[1].pos, mvp, p1); tri[1].u=attr[1].u; tri[1].v=attr[1].v; tri[1].light=attr[1].light; tri[1].lu=attr[1].lu; tri[1].lv=attr[1].lv;
+    cron_mat_point(&tri[2].pos, mvp, p2); tri[2].u=attr[2].u; tri[2].v=attr[2].v; tri[2].light=attr[2].light; tri[2].lu=attr[2].lu; tri[2].lv=attr[2].lv;
     int n = cron_clip_near(tri, clipped);
     for (int i = 0; i < n; ++i) cron_to_screen(&out[i], &clipped[i]);
     return n;
