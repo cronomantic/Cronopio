@@ -15,8 +15,22 @@
 #include "console.h"
 
 #include <stdint.h>
+#include <math.h>
+
+#define TURB_CYCLE 128   /* turbulence sine period (matches Quake's CYCLE) */
 
 typedef struct { int32_t x, y, z, u, v, w, c, lu, lv; } vert_t;
+
+/* Turbulence offset table: turbsin[i] in [0, 2*amp] texels, rebuilt when the
+ * amplitude changes. Quake's water warp is s' = s + amp + amp*sin(theta). */
+static int g_turbsin[TURB_CYCLE];
+static int g_turb_amp_built = -1;
+static void turb_build(int amp) {
+    if (amp == g_turb_amp_built) return;
+    for (int i = 0; i < TURB_CYCLE; i++)
+        g_turbsin[i] = (int)(amp + sin(i * (2.0 * 3.14159265358979 / TURB_CYCLE)) * amp);
+    g_turb_amp_built = amp;
+}
 
 static void rd_vert(const uint8_t* p, vert_t* o) {
     const int32_t* w = (const int32_t*)p;
@@ -51,6 +65,10 @@ void cron_gpu_colormap(cronopio_console_t* c, uint32_t offset, int levels, int s
     c->colormap_offset = offset; c->colormap_levels = levels; c->colormap_set = set;
 }
 
+void cron_gpu_turb(cronopio_console_t* c, int phase, int amp, int set) {
+    c->turb_phase = phase; c->turb_amp = amp; c->turb_set = set;
+}
+
 void cron_gpu_polys(cronopio_console_t* c, uint8_t* heap, int mode,
                     uint32_t verts_off, int count, int arg, int colkey) {
     if (count < 3) return;
@@ -71,6 +89,10 @@ void cron_gpu_polys(cronopio_console_t* c, uint8_t* heap, int mode,
     }
     int persp   = (mode & CRONOPIO_POLY_PERSP) && (mode & CRONOPIO_POLY_TEX);
     int gouraud = (mode & CRONOPIO_POLY_GOURAUD);
+    int clamp   = (mode & CRONOPIO_POLY_CLAMP);   /* alias skins clamp; world wraps */
+    int turb    = (mode & CRONOPIO_POLY_TURB) && (mode & CRONOPIO_POLY_TEX) && c->turb_set;
+    int turb_phase = 0;
+    if (turb) { turb_build(c->turb_amp); turb_phase = c->turb_phase; }
 
     /* Per-texel lighting (Quake-style): sample a small per-surface light grid
      * and remap through a levels*256 colormap. Needs TEX + both bindings. */
@@ -164,17 +186,47 @@ void cron_gpu_polys(cronopio_console_t* c, uint8_t* heap, int mode,
                     }
                     int tu = ((int)uf) >> 16;
                     int tv = ((int)vf) >> 16;
-                    tu %= tw; if (tu < 0) tu += tw;
-                    tv %= th; if (tv < 0) tv += th;
+                    if (turb) {
+                        /* Quake water/lava ripple: perturb each texel by a sine
+                         * of the *other* coordinate (+ phase), period 128. */
+                        int ou = tu, ov = tv;
+                        tu += g_turbsin[(ov + turb_phase) & (TURB_CYCLE - 1)];
+                        tv += g_turbsin[(ou + turb_phase) & (TURB_CYCLE - 1)];
+                    }
+                    if (clamp) {
+                        /* edge clamp: a texel past the skin border samples the
+                         * border, not the opposite edge (which gave alias
+                         * models a "blue seam" when texcoords wrapped). */
+                        if (tu < 0) tu = 0; else if (tu >= tw) tu = tw - 1;
+                        if (tv < 0) tv = 0; else if (tv >= th) tv = th - 1;
+                    } else {
+                        tu %= tw; if (tu < 0) tu += tw;
+                        tv %= th; if (tv < 0) tv += th;
+                    }
                     uint8_t s = tex[tv * tw + tu];
                     if (colkey >= 0 && s == (uint8_t)colkey) continue;
                     if (lightmap) {
-                        int lx = ((int)luf) >> 16;
-                        int ly = ((int)lvf) >> 16;
-                        if (lx < 0) lx = 0; else if (lx >= lmw) lx = lmw - 1;
-                        if (ly < 0) ly = 0; else if (ly >= lmh) ly = lmh - 1;
-                        int li = lm[ly * lmw + lx];
-                        if (li >= cmlevels) li = cmlevels - 1;
+                        /* Bilinear sample of the per-surface light grid so the
+                         * coarse 16-unit lumels gradate smoothly, matching the
+                         * software renderer's block interpolation (NEAREST left
+                         * the accel walls visibly blocky/inconsistent). The
+                         * grid bytes are colormap rows, interpolated in Q16. */
+                        int li_q = (int)luf, lv_q = (int)lvf;
+                        int lx = li_q >> 16, ly = lv_q >> 16;
+                        int fx = li_q & 0xFFFF, fy = lv_q & 0xFFFF;
+                        int lx1, ly1;
+                        if (lx < 0)            { lx = lx1 = 0; fx = 0; }
+                        else if (lx >= lmw-1)  { lx = lx1 = lmw-1; fx = 0; }
+                        else                     lx1 = lx + 1;
+                        if (ly < 0)            { ly = ly1 = 0; fy = 0; }
+                        else if (ly >= lmh-1)  { ly = ly1 = lmh-1; fy = 0; }
+                        else                     ly1 = ly + 1;
+                        int l00 = lm[ly *lmw + lx], l10 = lm[ly *lmw + lx1];
+                        int l01 = lm[ly1*lmw + lx], l11 = lm[ly1*lmw + lx1];
+                        int top = l00 + (((l10 - l00) * fx) >> 16);
+                        int bot = l01 + (((l11 - l01) * fx) >> 16);
+                        int li  = top + (((bot - top) * fy) >> 16);
+                        if (li < 0) li = 0; else if (li >= cmlevels) li = cmlevels - 1;
                         col = colormap[li * 256 + s];
                     } else {
                         col = cm ? cm[s] : s;

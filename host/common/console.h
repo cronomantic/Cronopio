@@ -43,6 +43,8 @@ enum { CRON_ENV_OFF = 0, CRON_ENV_ATTACK, CRON_ENV_DECAY, CRON_ENV_SUSTAIN, CRON
 #define CRONOPIO_POLY_PERSP      (1u << 2)   /* perspective-correct (needs w)  */
 #define CRONOPIO_POLY_ZTEST      (1u << 3)   /* depth test/write the z-buffer  */
 #define CRONOPIO_POLY_LIGHTMAP   (1u << 4)   /* per-texel light: out = colormap[lm[lu,lv]*256 + tex] */
+#define CRONOPIO_POLY_CLAMP      (1u << 5)   /* clamp texcoords to edge instead of wrapping (alias skins) */
+#define CRONOPIO_POLY_TURB       (1u << 6)   /* per-pixel texcoord turbulence (water/lava ripple) */
 
 #define CRONOPIO_FB_BYTES      (CRONOPIO_SCREEN_W * CRONOPIO_SCREEN_H)  /* 76 800 */
 #define CRONOPIO_PAL_BYTES     (CRONOPIO_PALETTE_SIZE * 4)              /* 128    */
@@ -159,6 +161,12 @@ typedef struct {
      * host_colormap) indexed [light*256 + texel]. Both in cart memory. */
     uint32_t lm_offset;   int lm_w, lm_h, lm_set;
     uint32_t colormap_offset; int colormap_levels, colormap_set;
+
+    /* CRONOPIO_POLY_TURB: Quake-style per-pixel texcoord turbulence (water /
+     * lava ripple). `turb_phase` advances the sine animation (the cart passes
+     * a per-frame value, period 128); `turb_amp` is the ripple amplitude in
+     * texels. Bound by cron_gpu_turb. */
+    int turb_phase, turb_amp, turb_set;
 
     /* audio */
     cron_voice_t       voices[CRONOPIO_AUDIO_CHANS];
@@ -373,6 +381,9 @@ void cron_gpu_zclear(cronopio_console_t* c, uint8_t* heap, int32_t far);
  * (each byte a colormap row); set=0 disables. colormap: a levels*256 table
  * indexed [light*256 + texel]; set=0 disables (falls back to cmap/raw). */
 void cron_gpu_lightmap(cronopio_console_t* c, uint32_t offset, int w, int h, int set);
+/* CRONOPIO_POLY_TURB binding: phase advances the ripple (period 128), amp is
+ * the texel amplitude. set=0 disables turbulence. */
+void cron_gpu_turb(cronopio_console_t* c, int phase, int amp, int set);
 void cron_gpu_colormap(cronopio_console_t* c, uint32_t offset, int levels, int set);
 
 /* Draw count/3 triangles from a vertex array at verts_off (CRONOPIO_VERT_BYTES

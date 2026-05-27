@@ -137,6 +137,7 @@ extern void     cvm_sys_cron_zclear      (int32_t far);
 extern void     cvm_sys_cron_polys       (int32_t mode, const void* verts, int32_t count, int32_t arg, int32_t colkey);
 extern void     cvm_sys_cron_lightmap    (const uint8_t* ptr, int32_t w, int32_t h);
 extern void     cvm_sys_cron_colormap    (const uint8_t* ptr, int32_t levels);
+extern void     cvm_sys_cron_turb        (int32_t phase, int32_t amp);
 
 /* ---------------- User-facing aliases (the `cron_*` names) -------------- */
 
@@ -295,6 +296,8 @@ enum {
     CRON_POLY_PERSP   = 1 << 2,   /* perspective-correct texture (uses .w)   */
     CRON_POLY_ZTEST   = 1 << 3,   /* depth test/write the bound z-buffer     */
     CRON_POLY_LIGHTMAP = 1 << 4,  /* per-texel light: colormap[lm[lu,lv]*256 + tex] */
+    CRON_POLY_CLAMP    = 1 << 5,  /* clamp texcoords to edge instead of wrapping (alias skins) */
+    CRON_POLY_TURB     = 1 << 6,  /* per-pixel texcoord turbulence (water/lava); see cron_turb */
 };
 
 /* Bind a 320*240 int32 depth buffer (NULL disables). */
@@ -310,6 +313,9 @@ static inline void     cron_polys        (int32_t mode, const cron_vert_t* verts
  * [light*256 + texel] (e.g. Quake's 64x256). out = colormap[lm[lu,lv]*256+tex]. */
 static inline void     cron_lightmap     (const uint8_t* ptr, int32_t w, int32_t h) { cvm_sys_cron_lightmap(ptr, w, h); }
 static inline void     cron_colormap     (const uint8_t* ptr, int32_t levels)       { cvm_sys_cron_colormap(ptr, levels); }
+/* CRON_POLY_TURB binding: animate texcoord turbulence (water/lava ripple).
+ * phase advances the ripple (period 128); amp is the texel amplitude (0=off). */
+static inline void     cron_turb         (int32_t phase, int32_t amp)               { cvm_sys_cron_turb(phase, amp); }
 
 /* Video pointers — populated by cron_resolve_video(). Until that is called
  * they are NULL; reading/writing through them then would crash, so always

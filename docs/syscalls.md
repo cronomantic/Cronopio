@@ -234,11 +234,12 @@ typedef struct {
 
 | Name                  | Signature (SDK)                                                  | Notes                                                                |
 |-----------------------|-----------------------------------------------------------------|----------------------------------------------------------------------|
-| `cron_polys`          | `void(mode, const cron_vert_t* verts, count, arg, colkey)`     | Draw `count/3` triangles. **mode** is a bitmask: `FLAT` (solid `arg`), `GOURAUD` (interpolate `.c` through the cmap), `TEX` (affine texture from image bank `arg`, `colkey` transparent), `PERSP` (perspective-correct, uses `.w`), `ZTEST` (depth test/write), `LIGHTMAP` (per-texel light, below). |
+| `cron_polys`          | `void(mode, const cron_vert_t* verts, count, arg, colkey)`     | Draw `count/3` triangles. **mode** is a bitmask: `FLAT` (solid `arg`), `GOURAUD` (interpolate `.c` through the cmap), `TEX` (affine texture from image bank `arg`, `colkey` transparent), `PERSP` (perspective-correct, uses `.w`), `ZTEST` (depth test/write), `LIGHTMAP` (per-texel light, below), `CLAMP` (clamp texcoords to the edge instead of wrapping — single-sheet skins), `TURB` (per-pixel turbulence, below). |
 | `cron_zbuf`           | `void(int32_t* zbuffer)`                                        | Bind a 320×240 i32 depth buffer in cart memory; NULL disables (painter's-only). |
 | `cron_zclear`         | `void(int32_t far)`                                             | Fill the bound z-buffer with `far` (e.g. `0x7FFFFFFF`).              |
 | `cron_lightmap`       | `void(const u8* ptr, i32 w, i32 h)`                            | Bind a per-surface light grid (8bpp, each byte a colormap *row*) for `LIGHTMAP` draws; NULL/0 disables |
 | `cron_colormap`       | `void(const u8* ptr, i32 levels)`                              | Bind a `levels*256` colormap indexed `[light*256 + texel]` (e.g. Quake's 64×256); NULL/0 disables |
+| `cron_turb`           | `void(i32 phase, i32 amp)`                                     | Bind per-pixel texcoord turbulence for `TURB` draws (water/lava ripple); `phase` advances the sine (period 128), `amp` is the texel amplitude; `amp<=0` disables |
 
 Like the rasteriser accelerators, triangles honour the clip rect (viewport)
 but ignore camera and the draw palette; the active `cmap` shades Gouraud and
@@ -253,6 +254,13 @@ then writes `colormap[l*256 + t]`. Bind the grid with `cron_lightmap` (rebind
 per surface) and the table once with `cron_colormap`. This keeps a full
 per-texel lightmap (not the per-triangle `cmap` shade) on the indexed
 framebuffer — the offload path for Quake's lightmapped world.
+
+**`TURB`** (with `TEX`) warps texcoords per pixel for a Quake-style water/lava
+ripple: each texel `(u,v)` is displaced by a sine of the *other* coordinate,
+`u' = u + turbsin[(v+phase) & 127]`, `v' = v + turbsin[(u+phase) & 127]`, where
+`turbsin` spans `[0, 2*amp]` texels. Bind `phase`/`amp` with `cron_turb`
+(advance `phase` per frame to animate). The result still wraps modulo the image
+dimensions, so water textures keep tiling.
 
 ## Cartridge ROM
 

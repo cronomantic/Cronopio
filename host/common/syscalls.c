@@ -401,6 +401,12 @@ static int sys_lightmap(struct cvm_image *img, int32_t *r, void *ud) {
     cron_gpu_lightmap(X->c, ptr, w, h, 1);
     r[0] = 0; return 0;
 }
+static int sys_turb(struct cvm_image *img, int32_t *r, void *ud) {
+    (void)img; int phase = (int)r[0], amp = (int)r[1];
+    if (amp <= 0) { cron_gpu_turb(X->c, 0, 0, 0); r[0] = 0; return 0; }
+    cron_gpu_turb(X->c, phase, amp, 1);
+    r[0] = 0; return 0;
+}
 static int sys_colormap(struct cvm_image *img, int32_t *r, void *ud) {
     uint32_t ptr = (uint32_t)r[0]; int levels = (int)r[1];
     if (ptr == 0 || levels <= 0 ||
@@ -732,6 +738,7 @@ static const entry_t kSyscalls[] = {
     /* 3D triangle submission */
     { "cvm_sys_cron_zbuf",         sys_zbuf         },
     { "cvm_sys_cron_lightmap",     sys_lightmap     },
+    { "cvm_sys_cron_turb",         sys_turb         },
     { "cvm_sys_cron_colormap",     sys_colormap     },
     { "cvm_sys_cron_zclear",       sys_zclear       },
     { "cvm_sys_cron_polys",        sys_polys        },
