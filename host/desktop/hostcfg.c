@@ -47,6 +47,10 @@ void hostcfg_defaults(host_cfg_t* cfg) {
 
     cfg->joy_guid[0] = '\0';
     cfg->last_dir[0] = '\0';
+
+    cfg->scale      = 3;   /* 960x720 window */
+    cfg->fullscreen = 0;
+    cfg->vsync      = 1;
 }
 
 /* Strip a trailing CR/LF and any leading whitespace; returns the start. */
@@ -84,7 +88,13 @@ int hostcfg_load(host_cfg_t* cfg, const char* path) {
             snprintf(cfg->joy_guid, sizeof(cfg->joy_guid), "%s", val);
         if (!strcmp(key, "last_dir"))
             snprintf(cfg->last_dir, sizeof(cfg->last_dir), "%s", val);
+        if (!strcmp(key, "scale"))      cfg->scale      = atoi(val);
+        if (!strcmp(key, "fullscreen")) cfg->fullscreen = atoi(val) != 0;
+        if (!strcmp(key, "vsync"))      cfg->vsync      = atoi(val) != 0;
     }
+
+    if (cfg->scale < HOSTCFG_SCALE_MIN) cfg->scale = HOSTCFG_SCALE_MIN;
+    if (cfg->scale > HOSTCFG_SCALE_MAX) cfg->scale = HOSTCFG_SCALE_MAX;
     fclose(f);
     return 0;
 }
@@ -101,6 +111,10 @@ int hostcfg_save(const host_cfg_t* cfg, const char* path) {
         fprintf(f, "gbtn.%s=%d\n", pad_names[b], (int)cfg->gbtn[b]);
     fprintf(f, "joy_guid=%s\n", cfg->joy_guid);
     fprintf(f, "last_dir=%s\n", cfg->last_dir);
+    fprintf(f, "# Video: scale 1..6 (window = scale*320 x scale*240), fullscreen/vsync 0|1.\n");
+    fprintf(f, "scale=%d\n", cfg->scale);
+    fprintf(f, "fullscreen=%d\n", cfg->fullscreen);
+    fprintf(f, "vsync=%d\n", cfg->vsync);
 
     fclose(f);
     return 0;

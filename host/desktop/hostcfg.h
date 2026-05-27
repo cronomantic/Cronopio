@@ -33,7 +33,18 @@ typedef struct {
     char joy_guid[40];
     /* Last directory the file browser showed ("" = start in the cwd). */
     char last_dir[1024];
+
+    /* Video. scale = integer window multiple of the 320x240 framebuffer (1..6);
+     * fullscreen = desktop fullscreen (the cart is letterboxed 4:3); vsync =
+     * present synced to the display. All persisted + settable on the CLI and in
+     * the F1 menu's Video screen. */
+    int scale;
+    int fullscreen;
+    int vsync;
 } host_cfg_t;
+
+#define HOSTCFG_SCALE_MIN 1
+#define HOSTCFG_SCALE_MAX 6
 
 /* Fill cfg with the built-in defaults (arrows+WASD-era layout: arrows -> d-pad,
  * Z/X/C/V -> A/B/X/Y; controller d-pad + A/B/X/Y face buttons). */

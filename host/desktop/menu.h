@@ -23,6 +23,7 @@ typedef struct {
     int  (*load_cart)(void* ud, const char* path); /* 0 = ok, <0 = failed */
     void (*reset_cart)(void* ud);
     void (*quit)(void* ud);
+    void (*apply_video)(void* ud);   /* re-apply cfg.scale/fullscreen/vsync live */
 } menu_host_t;
 
 typedef struct menu menu_t;     /* opaque; allocate one with menu_create */
@@ -40,6 +41,10 @@ void menu_close(menu_t* m);
 
 /* Tell the menu a controller (un)plugged so its Joystick screen stays current. */
 void menu_set_joy_name(menu_t* m, const char* name);
+
+/* Tell the menu the current output size (window pixels) so its overlay lays out
+ * correctly after a window resize / fullscreen toggle. */
+void menu_set_size(menu_t* m, int win_w, int win_h);
 
 /* Feed an SDL event while open. Returns 1 if the menu consumed it. */
 int  menu_handle_event(menu_t* m, const SDL_Event* ev);

@@ -42,7 +42,11 @@ windows or audio devices.
 
 **`host/desktop/`** — SDL2 platform shell. Creates the window,
 opens the audio device, polls events, copies the host framebuffer to
-a streaming texture, calls into the common runtime per frame.
+a streaming texture, calls into the common runtime per frame. Video is
+configurable (persisted in `cronopio.cfg`, set on the CLI, or in the F1
+menu's Video screen): integer window **scale** 1–6, **fullscreen** (the
+320×240 image is letterboxed 4:3), and **vsync**. CLI:
+`cronopio[.exe] [cart] [--scale=N] [--fullscreen|--windowed] [--vsync|--no-vsync]`.
 
 **`host/web/`** — same shell built through Emscripten. Reuses
 `host/common/` and most of the SDL2 code; differs only in main loop

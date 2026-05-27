@@ -3,6 +3,7 @@
 
 #include "menu.h"
 #include "font8x8.h"
+#include "console.h"      /* CRONOPIO_SCREEN_W/H */
 #include "cvm.h"          /* CVM_SEC_META — cart metadata section */
 
 #include <stdio.h>
@@ -20,7 +21,7 @@
 #define CH             (GLYPH * TEXT_SCALE)
 #define ROW_H          (CH + 4)
 
-typedef enum { SCR_MAIN, SCR_BROWSE, SCR_CART, SCR_CONTROLS, SCR_JOYSTICK } screen_t;
+typedef enum { SCR_MAIN, SCR_BROWSE, SCR_CART, SCR_CONTROLS, SCR_JOYSTICK, SCR_VIDEO } screen_t;
 
 typedef struct {
     char name[NAME_MAX_];
@@ -315,9 +316,17 @@ static void scan_dir(menu_t* m) {
 #define MAIN_RESET  1
 #define MAIN_CTRL   2
 #define MAIN_JOY    3
-#define MAIN_RESUME 4
-#define MAIN_QUIT   5
-#define MAIN_COUNT  6
+#define MAIN_VIDEO  4
+#define MAIN_RESUME 5
+#define MAIN_QUIT   6
+#define MAIN_COUNT  7
+
+/* Video screen (SCR_VIDEO). */
+#define VID_SCALE   0
+#define VID_FULL    1
+#define VID_VSYNC   2
+#define VID_BACK    3
+#define VID_COUNT   4
 
 /* Per-cart action screen (SCR_CART). */
 #define CART_LOAD    0
@@ -331,6 +340,7 @@ static void enter_main(menu_t* m)     { m->screen = SCR_MAIN;     m->sel = 0; m-
 static void enter_controls(menu_t* m) { m->screen = SCR_CONTROLS; m->sel = 0; m->scroll = 0; m->capturing = 0; }
 static void enter_joystick(menu_t* m) { m->screen = SCR_JOYSTICK; m->sel = 0; m->scroll = 0; m->capturing = 0; }
 static void enter_browse(menu_t* m)   { m->screen = SCR_BROWSE; m->capturing = 0; scan_dir(m); }
+static void enter_video(menu_t* m)    { m->screen = SCR_VIDEO;  m->sel = 0; m->scroll = 0; }
 
 static int rows_on_screen(const menu_t* m) {
     switch (m->screen) {
@@ -338,6 +348,7 @@ static int rows_on_screen(const menu_t* m) {
         case SCR_CART:      return CART_COUNT;
         case SCR_CONTROLS:  return PAD_BTN_COUNT;
         case SCR_JOYSTICK:  return PAD_BTN_COUNT;
+        case SCR_VIDEO:     return VID_COUNT;
         default:            return MAIN_COUNT;
     }
 }
@@ -361,12 +372,28 @@ static void activate_main(menu_t* m) {
             break;
         case MAIN_CTRL:   enter_controls(m); break;
         case MAIN_JOY:    enter_joystick(m); break;
+        case MAIN_VIDEO:  enter_video(m); break;
         case MAIN_RESUME:
             if (m->has_cart) menu_close(m);
             else snprintf(m->status, sizeof(m->status), "Load a cartridge first");
             break;
         case MAIN_QUIT:   m->host.quit(m->host.ud); break;
     }
+}
+
+/* Video screen: A/Enter/Right cycles the selected option, then applies it live
+ * (the change is persisted when the menu closes, like the pad bindings). */
+static void activate_video(menu_t* m) {
+    switch (m->sel) {
+        case VID_SCALE:
+            m->cfg->scale = (m->cfg->scale >= HOSTCFG_SCALE_MAX)
+                          ? HOSTCFG_SCALE_MIN : m->cfg->scale + 1;
+            break;
+        case VID_FULL:  m->cfg->fullscreen = !m->cfg->fullscreen; break;
+        case VID_VSYNC: m->cfg->vsync      = !m->cfg->vsync;      break;
+        case VID_BACK:  enter_main(m); return;
+    }
+    if (m->host.apply_video) m->host.apply_video(m->host.ud);
 }
 
 static void activate_browse(menu_t* m) {
@@ -425,6 +452,12 @@ void menu_open(menu_t* m, const char* start_dir, const char* joy_name, int has_c
 void menu_close(menu_t* m) { m->open = 0; m->capturing = 0; }
 
 void menu_set_joy_name(menu_t* m, const char* name) { if (m) m->joy_name = name; }
+
+void menu_set_size(menu_t* m, int win_w, int win_h) {
+    if (!m) return;
+    if (win_w > 0) m->win_w = win_w;
+    if (win_h > 0) m->win_h = win_h;
+}
 
 /* ---- per-cart action screen (SCR_CART) — all pad-driven ---------------- */
 
@@ -540,6 +573,7 @@ activate:
             m->capturing = 1; m->capture_btn = m->sel; break;
         case SCR_JOYSTICK:
             m->capturing = 1; m->capture_btn = m->sel; break;
+        case SCR_VIDEO:  activate_video(m); break;
     }
     return 1;
 
@@ -602,10 +636,28 @@ static const char* lbl_main(menu_t* m, int i, char* buf, size_t cap) {
         case MAIN_RESET:  return m->has_cart ? "Reset cartridge" : "Reset cartridge (none)";
         case MAIN_CTRL:   return "Controls (keyboard)";
         case MAIN_JOY:    return "Joystick";
+        case MAIN_VIDEO:  return "Video";
         case MAIN_RESUME: return m->has_cart ? "Resume" : "Resume (no cartridge)";
         case MAIN_QUIT:   return "Quit";
     }
     (void)buf; return "";
+}
+
+static const char* lbl_video(menu_t* m, int i, char* buf, size_t cap) {
+    switch (i) {
+        case VID_SCALE:
+            snprintf(buf, cap, "Window scale : %dx  (%dx%d)", m->cfg->scale,
+                     CRONOPIO_SCREEN_W * m->cfg->scale, CRONOPIO_SCREEN_H * m->cfg->scale);
+            return buf;
+        case VID_FULL:
+            snprintf(buf, cap, "Fullscreen   : %s", m->cfg->fullscreen ? "On" : "Off");
+            return buf;
+        case VID_VSYNC:
+            snprintf(buf, cap, "Vsync        : %s", m->cfg->vsync ? "On" : "Off");
+            return buf;
+        case VID_BACK: return "Back";
+    }
+    return "";
 }
 
 static const char* lbl_cart(menu_t* m, int i, char* buf, size_t cap) {
@@ -708,6 +760,9 @@ void menu_render(menu_t* m) {
             draw_list(m, title, x, y, w, PAD_BTN_COUNT, lbl_joystick);
             break;
         }
+        case SCR_VIDEO:
+            draw_list(m, "VIDEO", x, y, w, VID_COUNT, lbl_video);
+            break;
     }
 
     /* footer: a rule, then (on the cart screen) its detail, status, and hints. */
@@ -730,6 +785,7 @@ void menu_render(menu_t* m) {
         (m->screen == SCR_MAIN)   ? "Up/Down  move      A/Enter  select   B/Esc  resume"
       : (m->screen == SCR_BROWSE) ? "Up/Down  move      A/Enter  open      B/Esc  back"
       : (m->screen == SCR_CART)   ? "Up/Down  move      A/Enter  choose    B/Esc  back"
+      : (m->screen == SCR_VIDEO)  ? "Up/Down  move      A/Enter  change    B/Esc  back"
       : "A/Enter  rebind    B/Esc  back";
     draw_text(m, x, fy, COL_HINT, hint);
 }
