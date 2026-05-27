@@ -25,6 +25,13 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#ifdef _WIN32
+#include <direct.h>
+#define HOST_MKDIR(p) _mkdir(p)
+#else
+#define HOST_MKDIR(p) mkdir((p), 0777)
+#endif
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
@@ -57,6 +64,7 @@ typedef struct {
 
     host_cfg_t          cfg;
     char                cfg_path[1024];
+    char                base_path[1024];   /* host exe dir (trailing sep), for relative save_dir */
     menu_t             *menu;
 
     int                 running;
@@ -212,9 +220,32 @@ static void desktop_present_cb(void* ud) {
 /* ---- cart load / reset (also the menu's load_cart/reset_cart callbacks) -- */
 
 /* ---- per-cart save persistence ("memory card") ------------------------- */
-/* The cart's save blob lives beside the cart as <cart>.sav. We load it before
- * running the cart (its libc reads the save region at boot) and write it back
- * whenever the cart marks it dirty, atomically (temp + rename). */
+/* The cart's save blob is <name>.sav in the configured save folder (cfg.save_dir;
+ * "" = beside the cartridge). We load it before running the cart (its libc reads
+ * the save region at boot) and write it back when the cart marks it dirty,
+ * atomically (temp + rename). */
+
+/* Build the .sav path for the current cart into `out`. With no save_dir it is
+ * "<cart>.sav" beside the cartridge; otherwise "<dir>/<cartname>.sav", where a
+ * relative dir is taken under the host's base_path and the dir is created. */
+static void cart_save_path(app_t* a, char* out, size_t cap) {
+    if (!a->cfg.save_dir[0]) {
+        snprintf(out, cap, "%s.sav", a->cart_path);
+        return;
+    }
+    /* cart filename (after the last path separator) */
+    const char* name = a->cart_path;
+    for (const char* p = a->cart_path; *p; ++p)
+        if (*p == '/' || *p == '\\') name = p + 1;
+    /* absolute (/, \, or "X:") used verbatim; relative resolved under base_path */
+    const char* sd = a->cfg.save_dir;
+    int absolute = sd[0] == '/' || sd[0] == '\\' || (sd[0] && sd[1] == ':');
+    char dir[1200];
+    if (absolute) snprintf(dir, sizeof dir, "%s", sd);
+    else          snprintf(dir, sizeof dir, "%s%s", a->base_path, sd);
+    HOST_MKDIR(dir);   /* ensure it exists (ignore EEXIST) */
+    snprintf(out, cap, "%s/%s.sav", dir, name);
+}
 
 static void load_cart_save(app_t* a) {
     cronopio_console_t* c = a->console;
@@ -222,8 +253,8 @@ static void load_cart_save(app_t* a) {
     c->save_dirty = 0;
     cronopio_save_reserve(c, CRONOPIO_SAVE_DEFAULT);   /* baseline capacity */
     if (!a->cart_path[0]) return;
-    char p[1100];
-    snprintf(p, sizeof p, "%s.sav", a->cart_path);
+    char p[1300];
+    cart_save_path(a, p, sizeof p);
     FILE* f = fopen(p, "rb");
     if (!f) return;
     fseek(f, 0, SEEK_END); long sz = ftell(f); fseek(f, 0, SEEK_SET);
@@ -236,9 +267,9 @@ static void load_cart_save(app_t* a) {
 
 static void persist_cart_save(app_t* a) {
     if (!a->has_cart || !a->console->save_dirty || !a->cart_path[0]) return;
-    char p[1100], tmp[1112];
-    snprintf(p,   sizeof p,   "%s.sav",     a->cart_path);
-    snprintf(tmp, sizeof tmp, "%s.sav.tmp", a->cart_path);
+    char p[1300], tmp[1312];
+    cart_save_path(a, p, sizeof p);
+    snprintf(tmp, sizeof tmp, "%s.tmp", p);
     FILE* f = fopen(tmp, "wb");
     if (!f) return;
     size_t n  = a->console->save_len;
@@ -470,8 +501,9 @@ int main(int argc, char** argv) {
     hostcfg_defaults(&app.cfg);
     {
         char* base = SDL_GetBasePath();
+        snprintf(app.base_path, sizeof(app.base_path), "%s", base ? base : "");
         snprintf(app.cfg_path, sizeof(app.cfg_path), "%scronopio.cfg",
-                 base ? base : "");
+                 app.base_path);
         hostcfg_load(&app.cfg, app.cfg_path);
         /* First run: seed the browser at the executable's directory. */
         if (!app.cfg.last_dir[0] && base)
@@ -479,8 +511,9 @@ int main(int argc, char** argv) {
         if (base) SDL_free(base);
     }
 
-    /* CLI: the first bare arg is the cart; flags override the saved video cfg.
-     *   --scale=N (1..6)   --fullscreen / --windowed   --vsync / --no-vsync   */
+    /* CLI: the first bare arg is the cart; flags override the saved cfg.
+     *   --scale=N (1..6)  --fullscreen / --windowed  --vsync / --no-vsync
+     *   --saves=DIR ("" or omit = beside the cartridge)                     */
     const char* cart_path = NULL;
     for (int i = 1; i < argc; ++i) {
         const char* s = argv[i];
@@ -489,6 +522,8 @@ int main(int argc, char** argv) {
         else if (!strcmp(s, "--windowed"))   app.cfg.fullscreen = 0;
         else if (!strcmp(s, "--vsync"))      app.cfg.vsync = 1;
         else if (!strcmp(s, "--no-vsync"))   app.cfg.vsync = 0;
+        else if (!strncmp(s, "--saves=", 8))
+            snprintf(app.cfg.save_dir, sizeof(app.cfg.save_dir), "%s", s + 8);
         else if (s[0] != '-' && !cart_path)  cart_path = s;
     }
     if (app.cfg.scale < HOSTCFG_SCALE_MIN) app.cfg.scale = HOSTCFG_SCALE_MIN;

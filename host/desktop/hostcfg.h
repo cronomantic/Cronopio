@@ -41,6 +41,12 @@ typedef struct {
     int scale;
     int fullscreen;
     int vsync;
+
+    /* Where per-cart <name>.sav files live. "" = beside the cartridge (default).
+     * A relative path is resolved against the host executable's directory (so
+     * the F1 toggle's "saves" means <host>/saves/); an absolute path is used as
+     * is (for the --saves=DIR CLI flag). */
+    char save_dir[1024];
 } host_cfg_t;
 
 #define HOSTCFG_SCALE_MIN 1

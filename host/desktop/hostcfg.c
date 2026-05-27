@@ -51,6 +51,7 @@ void hostcfg_defaults(host_cfg_t* cfg) {
     cfg->scale      = 3;   /* 960x720 window */
     cfg->fullscreen = 0;
     cfg->vsync      = 1;
+    cfg->save_dir[0] = '\0';   /* beside the cartridge */
 }
 
 /* Strip a trailing CR/LF and any leading whitespace; returns the start. */
@@ -91,6 +92,8 @@ int hostcfg_load(host_cfg_t* cfg, const char* path) {
         if (!strcmp(key, "scale"))      cfg->scale      = atoi(val);
         if (!strcmp(key, "fullscreen")) cfg->fullscreen = atoi(val) != 0;
         if (!strcmp(key, "vsync"))      cfg->vsync      = atoi(val) != 0;
+        if (!strcmp(key, "save_dir"))
+            snprintf(cfg->save_dir, sizeof(cfg->save_dir), "%s", val);
     }
 
     if (cfg->scale < HOSTCFG_SCALE_MIN) cfg->scale = HOSTCFG_SCALE_MIN;
@@ -115,6 +118,8 @@ int hostcfg_save(const host_cfg_t* cfg, const char* path) {
     fprintf(f, "scale=%d\n", cfg->scale);
     fprintf(f, "fullscreen=%d\n", cfg->fullscreen);
     fprintf(f, "vsync=%d\n", cfg->vsync);
+    fprintf(f, "# Save folder: \"\"=beside the cartridge; relative=under the host dir; absolute=verbatim.\n");
+    fprintf(f, "save_dir=%s\n", cfg->save_dir);
 
     fclose(f);
     return 0;

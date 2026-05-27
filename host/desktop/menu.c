@@ -317,9 +317,10 @@ static void scan_dir(menu_t* m) {
 #define MAIN_CTRL   2
 #define MAIN_JOY    3
 #define MAIN_VIDEO  4
-#define MAIN_RESUME 5
-#define MAIN_QUIT   6
-#define MAIN_COUNT  7
+#define MAIN_SAVES  5
+#define MAIN_RESUME 6
+#define MAIN_QUIT   7
+#define MAIN_COUNT  8
 
 /* Video screen (SCR_VIDEO). */
 #define VID_SCALE   0
@@ -373,6 +374,15 @@ static void activate_main(menu_t* m) {
         case MAIN_CTRL:   enter_controls(m); break;
         case MAIN_JOY:    enter_joystick(m); break;
         case MAIN_VIDEO:  enter_video(m); break;
+        case MAIN_SAVES:
+            /* cycle the save folder in place: beside cart -> host "saves\" -> ...
+             * (an absolute path set via --saves cycles back to beside cart). */
+            if (!m->cfg->save_dir[0])
+                snprintf(m->cfg->save_dir, sizeof(m->cfg->save_dir), "saves");
+            else
+                m->cfg->save_dir[0] = '\0';
+            snprintf(m->status, sizeof(m->status), "Saves are written on level/exit");
+            break;
         case MAIN_RESUME:
             if (m->has_cart) menu_close(m);
             else snprintf(m->status, sizeof(m->status), "Load a cartridge first");
@@ -637,6 +647,13 @@ static const char* lbl_main(menu_t* m, int i, char* buf, size_t cap) {
         case MAIN_CTRL:   return "Controls (keyboard)";
         case MAIN_JOY:    return "Joystick";
         case MAIN_VIDEO:  return "Video";
+        case MAIN_SAVES:
+            if (!m->cfg->save_dir[0])
+                return "Save folder: Beside cartridge";
+            if (!strcmp(m->cfg->save_dir, "saves"))
+                return "Save folder: saves\\ (host dir)";
+            snprintf(buf, cap, "Save folder: %s", m->cfg->save_dir);
+            return buf;
         case MAIN_RESUME: return m->has_cart ? "Resume" : "Resume (no cartridge)";
         case MAIN_QUIT:   return "Quit";
     }
