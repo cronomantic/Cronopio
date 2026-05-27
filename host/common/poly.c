@@ -94,17 +94,28 @@ void cron_gpu_polys(cronopio_console_t* c, uint8_t* heap, int mode,
     int turb_phase = 0;
     if (turb) { turb_build(c->turb_amp); turb_phase = c->turb_phase; }
 
-    /* Per-texel lighting (Quake-style): sample a small per-surface light grid
-     * and remap through a levels*256 colormap. Needs TEX + both bindings. */
-    const uint8_t* lm = 0; int lmw = 0, lmh = 0;
+    /* A levels*256 colormap (cron_colormap) feeds two lit-texture modes below. */
     const uint8_t* colormap = 0; int cmlevels = 0;
+    if (c->colormap_set) {
+        colormap = heap + c->colormap_offset; cmlevels = c->colormap_levels;
+        if (cmlevels <= 0) colormap = 0;
+    }
+
+    /* Per-texel lighting (Quake world): sample a small per-surface light grid
+     * (lu/lv) for the colormap row. Needs TEX + grid + colormap. */
+    const uint8_t* lm = 0; int lmw = 0, lmh = 0;
     int lightmap = (mode & CRONOPIO_POLY_LIGHTMAP) && (mode & CRONOPIO_POLY_TEX)
-                 && c->lm_set && c->colormap_set;
+                 && c->lm_set && colormap;
     if (lightmap) {
         lm = heap + c->lm_offset; lmw = c->lm_w; lmh = c->lm_h;
-        colormap = heap + c->colormap_offset; cmlevels = c->colormap_levels;
-        if (lmw <= 0 || lmh <= 0 || cmlevels <= 0) lightmap = 0;
+        if (lmw <= 0 || lmh <= 0) lightmap = 0;
     }
+
+    /* Per-vertex lit texture (Quake alias): interpolate the vertex .c as the
+     * colormap row (Gouraud light) and remap the texel through it. TEX+GOURAUD
+     * with a colormap bound, and no per-texel grid. */
+    int texlit = (mode & CRONOPIO_POLY_GOURAUD) && (mode & CRONOPIO_POLY_TEX)
+               && colormap && !lightmap;
 
     const int CX0 = c->draw.clip_x0, CY0 = c->draw.clip_y0;
     const int CX1 = c->draw.clip_x1, CY1 = c->draw.clip_y1;
@@ -228,6 +239,11 @@ void cron_gpu_polys(cronopio_console_t* c, uint8_t* heap, int mode,
                         int li  = top + (((bot - top) * fy) >> 16);
                         if (li < 0) li = 0; else if (li >= cmlevels) li = cmlevels - 1;
                         col = colormap[li * 256 + s];
+                    } else if (texlit) {
+                        /* per-vertex light row (Gouraud) through the colormap */
+                        int row = (int)(bA*a.c + bB*b.c + bC*d.c);
+                        if (row < 0) row = 0; else if (row >= cmlevels) row = cmlevels - 1;
+                        col = colormap[row * 256 + s];
                     } else {
                         col = cm ? cm[s] : s;
                     }

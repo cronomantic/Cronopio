@@ -255,6 +255,13 @@ per surface) and the table once with `cron_colormap`. This keeps a full
 per-texel lightmap (not the per-triangle `cmap` shade) on the indexed
 framebuffer — the offload path for Quake's lightmapped world.
 
+**`TEX | GOURAUD`** with a `cron_colormap` table bound (and no `cron_lightmap`
+grid) is **per-vertex lit texture**: the vertex `.c` is interpolated as the
+colormap *row* (0…levels-1) and the texel remapped through it —
+`colormap[row*256 + texel]`. This is Gouraud light on a textured model (Quake
+alias monsters/items: each vertex `ambient + shade*dot(normal,lightdir)`).
+`GOURAUD` without `TEX` instead reads `.c` as a direct `cron_cmap` index.
+
 **`TURB`** (with `TEX`) warps texcoords per pixel for a Quake-style water/lava
 ripple: each texel `(u,v)` is displaced by a sine of the *other* coordinate,
 `u' = u + turbsin[(v+phase) & 127]`, `v' = v + turbsin[(u+phase) & 127]`, where
