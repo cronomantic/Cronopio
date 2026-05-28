@@ -212,6 +212,28 @@ static void frame(void) {
                   0,         /* colour key (index 0 transparent) */
                   facing_left ? CRON_BLT_HFLIP : 0);
 
+    /* --- Approaching "boss": breathing scale ------------------------ */
+    /* scale oscillates 1.0..3.0 over 64 frames via isin(phase) — gives a
+     * smooth zoom in/out. Anchored at top-left, so it expands rightward
+     * and downward. We compensate by shifting the dest position so the
+     * centre stays at (40, 40). */
+    int s_phase = (t_frames * 2) & 63;
+    int s_raw   = isin(s_phase);                        /* -32767..32767 */
+    /* Map to Q16.16 scale in 1.0..2.0 — note (s_raw + 32767) is already in
+     * [0..65534], which is essentially 0..0x10000 in Q16.16, so we can
+     * just add it as-is to 1.0. Avoids the 32-bit overflow that comes
+     * with (sval * 0x10000). */
+    int scale   = 0x10000 + (s_raw + 32767);            /* 1.0..1.9999 in Q16.16 */
+    int scaled_sz = (SPRSZ * scale) >> 16;
+    int boss_x = 40 - scaled_sz / 2;
+    int boss_y = 40 - scaled_sz / 2;
+    cron_blt_scale(0,                                   /* same sprite img */
+                   boss_x, boss_y,
+                   0, 0, SPRSZ, SPRSZ,
+                   0,                                   /* colour key */
+                   scale,
+                   0);                                  /* no flip */
+
     /* --- HUD --- */
     cron_text("CRONOPIO 2D", 11, 8, 8, 7);
 }

@@ -130,6 +130,8 @@ extern void     cvm_sys_cron_bltm_raster (int32_t tm, int32_t dx, int32_t dy, in
 extern void     cvm_sys_cron_bltm_affine (int32_t tm, int32_t dx, int32_t dy, int32_t dimpack, int32_t colkey, const struct cron_affine* table);
 /* blt_flip: sprite blit with HFLIP/VFLIP flags. 7 args (sx/sy and w/h packed). */
 extern void     cvm_sys_cron_blt_flip    (int32_t img, int32_t dx, int32_t dy, int32_t srcpack, int32_t dimpack, int32_t colkey, int32_t flags);
+/* blt_scale: sprite blit with variable scale + flip. No rotate. 8 args. */
+extern void     cvm_sys_cron_blt_scale   (int32_t img, int32_t dx, int32_t dy, int32_t srcpack, int32_t dimpack, int32_t colkey, int32_t scale_q16, int32_t flags);
 extern void     cvm_sys_cron_rectb       (int32_t x, int32_t y, int32_t w, int32_t h, int32_t color);
 extern void     cvm_sys_cron_circ        (int32_t x, int32_t y, int32_t r, int32_t color);
 extern void     cvm_sys_cron_circb       (int32_t x, int32_t y, int32_t r, int32_t color);
@@ -318,6 +320,15 @@ static inline void cron_blt_flip(int32_t img, int32_t dx, int32_t dy,
     int32_t src = (sx & 0xFFFF) | (sy << 16);
     int32_t dim = (w  & 0xFFFF) | (h  << 16);
     cvm_sys_cron_blt_flip(img, dx, dy, src, dim, colkey, flags);
+}
+
+/* Scale + flip blit. scale_q16: Q16.16, 0x10000 = 1.0; anchored top-left. */
+static inline void cron_blt_scale(int32_t img, int32_t dx, int32_t dy,
+                                  int32_t sx, int32_t sy, int32_t w, int32_t h,
+                                  int32_t colkey, int32_t scale_q16, int32_t flags) {
+    int32_t src = (sx & 0xFFFF) | (sy << 16);
+    int32_t dim = (w  & 0xFFFF) | (h  << 16);
+    cvm_sys_cron_blt_scale(img, dx, dy, src, dim, colkey, scale_q16, flags);
 }
 static inline void     cron_rectb       (int32_t x, int32_t y, int32_t w, int32_t h, int32_t c) { cvm_sys_cron_rectb(x, y, w, h, c); }
 static inline void     cron_circ        (int32_t x, int32_t y, int32_t r, int32_t c) { cvm_sys_cron_circ(x, y, r, c); }

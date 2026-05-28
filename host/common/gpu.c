@@ -276,6 +276,63 @@ void cron_gpu_blit_raw(cronopio_console_t* c, uint8_t* heap,
             put_px(c, fb, dx + i, dy + j, src[j * sw + i]);
 }
 
+/* Image bank blit with variable scale + flip flags. No rotation — for the
+ * rotation case use cron_blt_ex. scale_q16 is Q16.16 (0x10000 = 1.0). The
+ * sprite is scaled around its top-left corner (dx, dy), so a scaled sprite
+ * keeps that corner anchored — predictable for HUD / sprite positioning.
+ * Nearest-neighbour sampling with a per-axis fixed-point step so each
+ * destination pixel maps to one source texel.
+ *
+ * Cheaper than cron_blt_ex when rotation isn't needed (no trig, no AABB
+ * extents, single pass per dest pixel). Faster path for SNES-style
+ * "approaching boss", icon zoom, sprite breathing animations, etc. */
+void cron_gpu_blt_scale(cronopio_console_t* c, uint8_t* heap, int img,
+                        int dx, int dy, int sx, int sy, int w, int h,
+                        int colkey, int scale_q16, int flags) {
+    if ((unsigned)img >= CRONOPIO_IMAGE_SLOTS || !c->images[img].used) return;
+    if (w <= 0 || h <= 0 || scale_q16 <= 0) return;
+    cron_image_bank_t* b = &c->images[img];
+    const uint8_t* src = heap + b->offset;
+    uint8_t* fb = fb_of(c, heap);
+
+    /* Destination rect size. Truncated to integer pixels; very small scales
+     * may yield 0 — silently skip rather than draw a degenerate row/col. */
+    int dw = (int)((int64_t)w * scale_q16 >> 16);
+    int dh = (int)((int64_t)h * scale_q16 >> 16);
+    if (dw <= 0 || dh <= 0) return;
+
+    /* Per-dest-pixel source step in Q16.16. (w<<16)/dw is constant across
+     * the loop; precompute so we never integer-divide in the hot path. */
+    int32_t u_step = (int32_t)(((int64_t)w << 16) / dw);
+    int32_t v_step = (int32_t)(((int64_t)h << 16) / dh);
+
+    int hflip = (flags & 1);
+    int vflip = (flags & 2);
+    int32_t v0 = vflip ? ((int32_t)(h - 1) << 16) : 0;
+    int32_t dv = vflip ? -v_step : v_step;
+
+    int32_t v = v0;
+    for (int j = 0; j < dh; ++j, v += dv) {
+        int srcy_off = (int)(v >> 16);
+        if (srcy_off < 0 || srcy_off >= h) continue;
+        int srcy = sy + srcy_off;
+        if (srcy < 0 || srcy >= b->h) continue;
+        const uint8_t* row = src + srcy * b->w;
+        int32_t u0 = hflip ? ((int32_t)(w - 1) << 16) : 0;
+        int32_t du = hflip ? -u_step : u_step;
+        int32_t u = u0;
+        for (int i = 0; i < dw; ++i, u += du) {
+            int srcx_off = (int)(u >> 16);
+            if (srcx_off < 0 || srcx_off >= w) continue;
+            int srcx = sx + srcx_off;
+            if (srcx < 0 || srcx >= b->w) continue;
+            uint8_t s = row[srcx];
+            if (colkey >= 0 && s == (uint8_t)colkey) continue;
+            put_px(c, fb, dx + i, dy + j, s);
+        }
+    }
+}
+
 /* Image bank blit with horizontal/vertical flip flags. Cheap fast path for
  * sprites that need to face left or stand on their head — no rotation, no
  * scale, just NN sampling with optional axis mirroring. Matches cron_blt

@@ -407,6 +407,13 @@ void cron_gpu_blt_flip(cronopio_console_t* c, uint8_t* heap, int img,
                        int dx, int dy, int sx, int sy, int w, int h,
                        int colkey, int flags);
 
+/* Scale + flip (no rotate). scale_q16 is Q16.16 (0x10000 = 1.0). Anchored
+ * at top-left (dx, dy). flags as cron_gpu_blt_flip. Cheaper than blt_ex
+ * when only scaling is needed (no trig). */
+void cron_gpu_blt_scale(cronopio_console_t* c, uint8_t* heap, int img,
+                        int dx, int dy, int sx, int sy, int w, int h,
+                        int colkey, int scale_q16, int flags);
+
 /* --- Textured-rasteriser accelerators (the perf escape hatch for
  * software 3D — DOOM's R_DrawColumn / R_DrawSpan in native C). They honour
  * the clip rect but ignore camera and the draw palette: the active colormap

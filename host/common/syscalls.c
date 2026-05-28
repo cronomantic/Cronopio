@@ -285,6 +285,15 @@ static int sys_blt_flip(struct cvm_image *img, int32_t *r, void *ud) {
                       sx_i, sy_i, w_i, h_i, (int)r[5], (int)r[6]);
     r[0] = 0; return 0;
 }
+/* sys_blt_scale — 8 args (R0..R7). srcpack/dimpack as usual. */
+static int sys_blt_scale(struct cvm_image *img, int32_t *r, void *ud) {
+    (void)img; GUARD;
+    int16_t sx_i = (int16_t)(r[3] & 0xFFFF), sy_i = (int16_t)(r[3] >> 16);
+    int16_t w_i  = (int16_t)(r[4] & 0xFFFF), h_i  = (int16_t)(r[4] >> 16);
+    cron_gpu_blt_scale(X->c, HEAP, (int)r[0], (int)r[1], (int)r[2],
+                       sx_i, sy_i, w_i, h_i, (int)r[5], (int)r[6], (int)r[7]);
+    r[0] = 0; return 0;
+}
 
 /* sys_bltm_affine — 6 args (R0..R5). w/h packed as a single i16 pair. */
 static int sys_bltm_affine(struct cvm_image *img, int32_t *r, void *ud) {
@@ -816,6 +825,7 @@ static const entry_t kSyscalls[] = {
     { "cvm_sys_cron_bltm_raster",  sys_bltm_raster  },
     { "cvm_sys_cron_bltm_affine",  sys_bltm_affine  },
     { "cvm_sys_cron_blt_flip",     sys_blt_flip     },
+    { "cvm_sys_cron_blt_scale",    sys_blt_scale    },
     /* extended graphics: shapes */
     { "cvm_sys_cron_rectb",        sys_rectb        },
     { "cvm_sys_cron_circ",         sys_circ         },
