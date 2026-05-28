@@ -1,31 +1,35 @@
 # 2dpak
 
-Convert an 8-bit indexed BMP into a Cronopio cart C header (palette +
-pixel data + dimension macros). The cart `#include`s the generated
-header and registers via `cron_image` + `cron_palette_set`.
+Convert an 8-bit indexed image (PNG-8 or BMP-8) into a Cronopio cart C
+header (palette + pixel data + dimension macros). The cart `#include`s
+the generated header and registers via `cron_image` + `cron_palette_set`.
 
-## Why BMP-8 (not PNG)
+## Supported inputs
 
-PNG-8 would require ~700 lines of careful DEFLATE + framing code or a
-~5 KLoC vendored decoder. BMP-8 is a 50-line parser that any paint tool
-exports natively. The artist adds one ImageMagick step to their pipeline;
-the toolchain stays tiny and dependency-free.
+| Format | Path | Notes |
+|---|---|---|
+| **PNG-8 (indexed)** | stb_image (vendored, public domain) for IDAT decode + hand-rolled PLTE chunk parser for palette ordering | Preserves the artist's authored palette ordering (stb_image alone decodes to RGB and drops PLTE). Truecolour PNGs are rejected with a clear message. |
+| **BMP-8** | Native ~50-line parser (uncompressed BI_RGB, palette in BITMAPINFOHEADER). Top-down or bottom-up rows both supported. | Used as fallback when PNG isn't convenient. |
+
+Auto-detected by magic bytes (`89 50 4E 47` for PNG, `42 4D` for BMP).
 
 ## Workflow
 
 ```
 # 1. Author the tileset in your paint tool (GIMP / Krita / Aseprite),
-#    save as PNG (or whatever). Use an indexed palette of <= 32 colours.
+#    save as PNG (indexed mode) — use an indexed palette of <= 32 colours.
+#    GIMP: Image > Mode > Indexed (palette: 32 colours).
+#    Aseprite: native indexed mode.
 
-# 2. Convert to BMP-8 (BMP3 = simplest variant):
-magick tileset.png BMP3:tileset.bmp
-
-# 3. Pack into a C header:
-2dpak tileset.bmp tileset.h
+# 2. Pack into a C header (PNG-8 or BMP-8 both work):
+2dpak tileset.png tileset.h
 #    -> writes tileset.h with TILESET_pal[32], TILESET_pix[W*H],
 #       TILESET_W, TILESET_H, TILESET_PAL_COUNT.
 
-# 4. In the cart:
+# OR if you've already converted to BMP-8:
+2dpak tileset.bmp tileset.h
+
+# 3. In the cart:
 #include "tileset.h"
 
 int main(void) {
@@ -62,8 +66,6 @@ int main(void) {
 
 ## Limits / what's NOT done yet
 
-- **Input is BMP-8 only.** Reject everything else with a clear message.
-  PNG support could be added by vendoring `stb_image.h` — deferred.
 - **No tilemap import.** For small maps the cart hand-writes the u16
   array; for big maps a future `--tilemap=tiled.tmx` mode would parse
   Tiled XML. Add when first port hits a 50+ cell map.
@@ -71,7 +73,8 @@ int main(void) {
   `cron_tile_anim_t` tables until the first port asks for it.
 - **No quantization.** Input must be already-indexed with <= 32 colours.
   GIMP "Image → Mode → Indexed (palette: 32 colours)" does the right
-  thing in one click.
+  thing in one click; same with Aseprite's native indexed mode. A
+  truecolour PNG is rejected with a clear message.
 - **Output is a header, not a ROM blob.** When asset size starts
   bloating the .c (multi-MB), add a `--rom` mode that writes a binary
   consumable by `--rom=FILE` at cart-build time. Until then the C

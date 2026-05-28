@@ -1,26 +1,30 @@
 /*
- *  2dpak — convert an 8bpp (indexed-palette) BMP into a Cronopio cart C
- *  header. Input: a 32-colour-or-fewer BMP-8 (most paint tools export this
- *  via "Indexed mode" + "Save as BMP"; or via ImageMagick:
+ *  2dpak — convert an indexed-palette image into a Cronopio cart C header.
+ *  Accepts indexed BMP-8 and indexed PNG-8 directly; both preserve the
+ *  artist's palette ordering (so cart code that says "col 1 = skin, col 2
+ *  = hair" stays stable across edits).
  *
- *      magick input.png BMP3:out.bmp
- *
- *  Output: a C header with the palette (uint32_t 0x00RRGGBB[32]), the
+ *  Output: a C header with the palette (uint32_t 0x00RRGGBB[N]), the
  *  pixel data (uint8_t[w*h]), and dimension macros. The cart includes
  *  it and registers via cron_image / cron_palette_set.
  *
- *  WHY BMP-8 (not PNG): PNG decoding requires DEFLATE + ~700 lines of
- *  careful C or a 5K-line vendored decoder. BMP-8 is a 50-line parser
- *  that any artist tool exports natively. The artist adds one
- *  ImageMagick step to their pipeline; the toolchain stays tiny.
- *
- *  Limits: the BMP must be uncompressed (BI_RGB), 8 bits per pixel, with
- *  a palette of <= 256 entries (we use the first 32; the rest are ignored).
- *  Top-down or bottom-up rows both supported. Real-world content from
- *  GIMP/Krita/Aseprite/ImageMagick comes out exactly this shape.
+ *  Format detection is by magic bytes — PNG (89 50 4E 47), BMP (42 4D).
+ *  PNG path:
+ *    - Manually parses the PLTE chunk to recover the artist's palette
+ *      in their authored order (stb_image always decodes to RGB and
+ *      doesn't expose PLTE).
+ *    - Uses stb_image (vendored under vendor/stb_image.h, public domain)
+ *      for the IDAT-decoded pixel data. After decode, each RGB pixel is
+ *      mapped back to its index via the PLTE.
+ *    - Requires an indexed PNG (PNG-8 with a PLTE chunk). Truecolour PNGs
+ *      get rejected with a clear message — convert via "Image > Mode >
+ *      Indexed" in GIMP / Aseprite / Krita first.
+ *  BMP path:
+ *    - Native ~50-line parser; uncompressed BI_RGB, 8 bpp, palette in the
+ *      BITMAPINFOHEADER. Top-down or bottom-up rows both supported.
  *
  *  Usage:
- *      2dpak <input.bmp> <output.h> [--prefix=NAME] [--max-pal=32]
+ *      2dpak <input.{png,bmp}> <output.h> [--prefix=NAME] [--max-pal=32]
  *      2dpak --selftest <output.bmp>    # writes a known-good 32x16 test BMP
  */
 
@@ -28,6 +32,122 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+
+#define STB_IMAGE_IMPLEMENTATION
+#define STBI_NO_HDR
+#define STBI_NO_LINEAR
+#define STBI_NO_JPEG
+#define STBI_NO_TGA
+#define STBI_NO_GIF
+#define STBI_NO_PSD
+#define STBI_NO_PIC
+#define STBI_NO_PNM
+#define STBI_NO_BMP        /* we have our own BMP path */
+#include "vendor/stb_image.h"
+
+typedef struct {
+    int      w, h;
+    uint32_t palette[256];    /* 0x00RRGGBB */
+    int      pal_count;
+    uint8_t *pix;             /* w*h, row-major, top-down */
+} bmp8_t;
+
+/* ---------- PNG-8 parsing (PLTE manually, IDAT via stb_image) ----------- */
+
+/* Returns 1 if file starts with the PNG signature. */
+static int is_png(const uint8_t *buf, size_t n) {
+    static const uint8_t sig[8] = {0x89,0x50,0x4E,0x47,0x0D,0x0A,0x1A,0x0A};
+    return (n >= 8 && memcmp(buf, sig, 8) == 0);
+}
+
+/* Walk PNG chunks looking for PLTE. Format per chunk:
+ *   length(4 BE) | type(4) | data(length) | crc(4)
+ * PLTE data is N×3 bytes (RGB). Returns 0 on success and fills palette;
+ * returns 1 if no PLTE (i.e. truecolour PNG — caller should error). */
+static int read_png_plte(const uint8_t *buf, size_t n,
+                         uint32_t out_pal[256], int *out_n) {
+    size_t pos = 8;   /* skip signature; IHDR is next but we don't need its fields */
+    while (pos + 12 <= n) {
+        uint32_t len = ((uint32_t)buf[pos] << 24) | ((uint32_t)buf[pos+1] << 16)
+                     | ((uint32_t)buf[pos+2] << 8) |  (uint32_t)buf[pos+3];
+        const uint8_t *type = buf + pos + 4;
+        const uint8_t *data = buf + pos + 8;
+        if (pos + 8 + len + 4 > n) return 1;   /* truncated */
+        if (memcmp(type, "PLTE", 4) == 0) {
+            int pn = (int)(len / 3);
+            if (pn > 256) pn = 256;
+            for (int i = 0; i < pn; ++i) {
+                out_pal[i] = ((uint32_t)data[i*3+0] << 16)
+                           | ((uint32_t)data[i*3+1] << 8)
+                           |  (uint32_t)data[i*3+2];
+            }
+            *out_n = pn;
+            return 0;
+        }
+        if (memcmp(type, "IEND", 4) == 0) return 1;   /* end without PLTE */
+        pos += 8 + len + 4;
+    }
+    return 1;
+}
+
+static int read_png(const char *path, bmp8_t *out) {
+    /* Slurp the file for our own PLTE walk; stb_image will re-read via
+     * stbi_load and decode the IDAT to RGB independently. */
+    FILE *f = fopen(path, "rb");
+    if (!f) { fprintf(stderr, "open '%s' failed\n", path); return 1; }
+    fseek(f, 0, SEEK_END); long sz = ftell(f); rewind(f);
+    if (sz < 0 || sz > (1 << 28)) { fclose(f); fprintf(stderr, "%s: implausible size\n", path); return 1; }
+    uint8_t *raw = (uint8_t *)malloc((size_t)sz);
+    if (!raw) { fclose(f); fprintf(stderr, "%s: oom\n", path); return 1; }
+    if (fread(raw, 1, (size_t)sz, f) != (size_t)sz) {
+        free(raw); fclose(f); fprintf(stderr, "%s: short read\n", path); return 1;
+    }
+    fclose(f);
+
+    int pal_n = 0;
+    if (read_png_plte(raw, (size_t)sz, out->palette, &pal_n) != 0) {
+        free(raw);
+        fprintf(stderr,
+            "%s: no PLTE chunk (truecolour PNG?). Convert to indexed first:\n"
+            "  - GIMP: Image > Mode > Indexed (palette: 32 colours)\n"
+            "  - Aseprite: native indexed mode\n"
+            "  - ImageMagick: magick in.png -colors 32 PNG8:out.png\n",
+            path);
+        return 1;
+    }
+    out->pal_count = pal_n;
+
+    int w, h, ch;
+    uint8_t *rgb = stbi_load_from_memory(raw, (int)sz, &w, &h, &ch, 3);
+    free(raw);
+    if (!rgb) { fprintf(stderr, "%s: stb_image failed: %s\n", path, stbi_failure_reason()); return 1; }
+    out->w = w; out->h = h;
+    out->pix = (uint8_t *)malloc((size_t)w * (size_t)h);
+    if (!out->pix) { stbi_image_free(rgb); fprintf(stderr, "%s: oom %d bytes\n", path, w*h); return 1; }
+
+    /* Build a tiny RGB->idx lookup table over the PLTE (linear scan is
+     * fine for <= 256 entries; nothing fancier needed). Index 0 is the
+     * default if a pixel's colour isn't in the palette — which shouldn't
+     * happen for a true indexed PNG but might for one ImageMagick
+     * tweaked. We warn once if it occurs. */
+    int warned = 0;
+    for (int i = 0; i < w * h; ++i) {
+        uint32_t c = ((uint32_t)rgb[i*3+0] << 16)
+                   | ((uint32_t)rgb[i*3+1] << 8)
+                   |  (uint32_t)rgb[i*3+2];
+        int idx = 0;
+        for (int p = 0; p < pal_n; ++p) {
+            if (out->palette[p] == c) { idx = p; break; }
+            if (p == pal_n - 1 && !warned) {
+                fprintf(stderr, "warning: pixel %d has colour 0x%06X not in PLTE; using index 0\n", i, c);
+                warned = 1;
+            }
+        }
+        out->pix[i] = (uint8_t)idx;
+    }
+    stbi_image_free(rgb);
+    return 0;
+}
 
 /* ---------- BMP-8 parsing ----------------------------------------------- */
 
@@ -54,13 +174,6 @@ typedef struct {
     uint32_t biClrImportant;
 } bmp_info_hdr_t;
 #pragma pack(pop)
-
-typedef struct {
-    int      w, h;
-    uint32_t palette[256];    /* 0x00RRGGBB */
-    int      pal_count;
-    uint8_t *pix;             /* w*h, row-major, top-down */
-} bmp8_t;
 
 static int read_bmp8(const char *path, bmp8_t *out) {
     FILE *f = fopen(path, "rb");
@@ -249,23 +362,41 @@ int main(int argc, char **argv) {
     if (!prefix) {
         const char *p = out;
         for (const char *q = out; *q; ++q) if (*q == '/' || *q == '\\') p = q + 1;
-        size_t n = 0;
-        while (p[n] && p[n] != '.' && n + 1 < sizeof prefix_buf) {
-            char c = p[n];
+        size_t out_n = 0;
+        /* C identifiers can't start with a digit — prepend an underscore
+         * if needed so files like "8tiles.png" don't produce "8TILES"
+         * prefixes that fail to compile. */
+        if (p[0] >= '0' && p[0] <= '9') prefix_buf[out_n++] = '_';
+        for (size_t i = 0; p[i] && p[i] != '.' && out_n + 1 < sizeof prefix_buf; ++i) {
+            char c = p[i];
             /* C identifier-safe: alnum -> upper; everything else -> _ */
-            if      (c >= 'a' && c <= 'z') prefix_buf[n] = (char)(c - 'a' + 'A');
-            else if ((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) prefix_buf[n] = c;
-            else                                                       prefix_buf[n] = '_';
-            ++n;
+            if      (c >= 'a' && c <= 'z') prefix_buf[out_n] = (char)(c - 'a' + 'A');
+            else if ((c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) prefix_buf[out_n] = c;
+            else                                                       prefix_buf[out_n] = '_';
+            ++out_n;
         }
-        prefix_buf[n] = '\0';
-        if (n == 0) { fprintf(stderr, "empty derived prefix; use --prefix=NAME\n"); return 1; }
+        prefix_buf[out_n] = '\0';
+        if (out_n == 0 || (out_n == 1 && prefix_buf[0] == '_')) {
+            fprintf(stderr, "empty derived prefix; use --prefix=NAME\n");
+            return 1;
+        }
         prefix = prefix_buf;
     }
     if (max_pal < 1 || max_pal > 256) { fprintf(stderr, "--max-pal out of range 1..256\n"); return 1; }
 
+    /* Sniff magic to pick the parser. PNG = 89 50 4E 47, BMP = 42 4D. */
     bmp8_t bmp = {0};
-    if (read_bmp8(in, &bmp) != 0) return 1;
+    {
+        FILE *fh = fopen(in, "rb");
+        if (!fh) { fprintf(stderr, "open '%s' failed\n", in); return 1; }
+        uint8_t magic[8] = {0};
+        size_t got = fread(magic, 1, 8, fh);
+        fclose(fh);
+        if (got >= 8 && is_png(magic, got))           { if (read_png(in, &bmp) != 0)  return 1; }
+        else if (got >= 2 && magic[0]=='B' && magic[1]=='M') { if (read_bmp8(in, &bmp) != 0) return 1; }
+        else { fprintf(stderr, "%s: unrecognised format (magic %02X %02X) — need indexed PNG or BMP-8\n",
+                       in, magic[0], magic[1]); return 1; }
+    }
     fprintf(stderr, "%s: %dx%d, %d palette entries\n", in, bmp.w, bmp.h, bmp.pal_count);
 
     int rc = write_header(out, &bmp, prefix, max_pal);
