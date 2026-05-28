@@ -40,6 +40,13 @@ static uint8_t   sprite_img[SPRSZ * SPRSZ];
 static cron_raster_t raster_table[CRON_SCREEN_H];   /* sine-wave linescroll */
 static cron_affine_t affine_table[CRON_SCREEN_H];   /* Mode-7 perspective */
 
+/* Two palette remap banks for the sky — bank 1 paints cloud tiles in
+ * sunset oranges (cols 9/10 instead of 1/3); bank 2 paints them in
+ * deep dusk purples (cols 4/12). pal_bank per-scanline lets the sky
+ * gradient from sunset at the top to dusk at the bottom. */
+static uint8_t sunset_remap[256];
+static uint8_t dusk_remap[256];
+
 /* ---------------------------------------------------------------------- */
 /* Asset build */
 
@@ -89,6 +96,20 @@ static void build_floor_map(void) {
     }
 }
 
+static void build_palette_banks(void) {
+    /* Identity for everything by default; then map the sky cloud cols
+     * (1 and 3) to bank-specific colours. */
+    for (int i = 0; i < 256; ++i) {
+        sunset_remap[i] = (uint8_t)i;
+        dusk_remap[i]   = (uint8_t)i;
+    }
+    /* Cols 1, 3 are the sky cloud tints. */
+    sunset_remap[1] = 9;     /* warm orange */
+    sunset_remap[3] = 10;    /* yellow highlight */
+    dusk_remap[1]   = 4;     /* deep purple */
+    dusk_remap[3]   = 12;    /* indigo */
+}
+
 static void build_sprite(void) {
     /* A small "character" — palette index 0 is transparent (colkey 0).
      * Body in 11, eye/highlight in 7 so HFLIP is visible (asymmetric). */
@@ -129,14 +150,18 @@ static int isin(int phase) {
 
 static void fill_raster_wave(int phase) {
     /* Per-line scroll_x = sin(y/period + phase) * amplitude.
-     * Reset everything else so unused fields are well-defined. */
+     * Sky band (y < 80) gets a sunset→dusk gradient via pal_bank per line:
+     *   y =  0..39   → bank 1 (sunset)
+     *   y = 40..79   → bank 2 (dusk)
+     * Lines below the sky use bank 0 (identity) — though they aren't
+     * touched by this blit anyway (sky is only 80 px tall). */
     for (int y = 0; y < CRON_SCREEN_H; ++y) {
         int s = isin((y >> 2) + phase) >> 11;     /* /2048: amplitude ~16 px */
         raster_table[y].scroll_x  = (int16_t)s;
         raster_table[y].scroll_y  = 0;
         raster_table[y].pal_offset = 0;
         raster_table[y].flags     = 0;
-        raster_table[y]._pad      = 0;
+        raster_table[y].pal_bank  = (y < 40) ? 1 : (y < 80 ? 2 : 0);
     }
 }
 
@@ -234,6 +259,20 @@ static void frame(void) {
                    scale,
                    0);                                  /* no flip */
 
+    /* --- Spinning + V-flipped sprite (exercises cron_blt_ex_flip) ---
+     * Rotates clockwise 6 deg/frame; the V-flip pre-mirrors the source
+     * before rotation so the asymmetric "eye" face appears upside-down
+     * during the spin. */
+    int spin_x = 240 - SPRSZ / 2;
+    int spin_y = 40  - SPRSZ / 2;
+    cron_blt_ex_flip(0,                              /* image slot */
+                     spin_x, spin_y,
+                     0, 0, SPRSZ, SPRSZ,
+                     0,                              /* colour key */
+                     (t_frames * 6) % 360,           /* rotate deg */
+                     CRON_SCALE_1X,                  /* no scale */
+                     CRON_BLT_VFLIP);
+
     /* --- HUD --- */
     cron_text("CRONOPIO 2D", 11, 8, 8, 7);
 }
@@ -248,6 +287,9 @@ int main(void) {
     build_sky_map();
     build_floor_map();
     build_sprite();
+    build_palette_banks();
+    cron_palette_bank(1, sunset_remap);
+    cron_palette_bank(2, dusk_remap);
 
     /* Register banks:
      *   image slot 0 = the sprite (16x16)

@@ -295,6 +295,14 @@ static int sys_blt_scale(struct cvm_image *img, int32_t *r, void *ud) {
     r[0] = 0; return 0;
 }
 
+/* sys_palette_bank — registers a 256-byte remap table as bank `slot`.
+ * 2 args: (slot, offset). */
+static int sys_palette_bank(struct cvm_image *img, int32_t *r, void *ud) {
+    (void)img; GUARD;
+    cron_gpu_palette_bank(X->c, (int)r[0], (uint32_t)r[1], X->img->mem_size);
+    r[0] = 0; return 0;
+}
+
 /* sys_bltm_affine — 6 args (R0..R5). w/h packed as a single i16 pair. */
 static int sys_bltm_affine(struct cvm_image *img, int32_t *r, void *ud) {
     (void)img; GUARD;
@@ -826,6 +834,7 @@ static const entry_t kSyscalls[] = {
     { "cvm_sys_cron_bltm_affine",  sys_bltm_affine  },
     { "cvm_sys_cron_blt_flip",     sys_blt_flip     },
     { "cvm_sys_cron_blt_scale",    sys_blt_scale    },
+    { "cvm_sys_cron_palette_bank", sys_palette_bank },
     /* extended graphics: shapes */
     { "cvm_sys_cron_rectb",        sys_rectb        },
     { "cvm_sys_cron_circ",         sys_circ         },

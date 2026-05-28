@@ -377,6 +377,19 @@ int cron_gpu_image(cronopio_console_t* c, int slot, uint32_t offset, int w, int 
     return 0;
 }
 
+/* Register a 256-byte palette remap (input colour index → output index)
+ * as bank `slot`. Bank 0 is reserved as the identity sentinel — binding
+ * it is rejected. Returns 0 on success, -1 on invalid slot / OOB offset. */
+int cron_gpu_palette_bank(cronopio_console_t* c, int slot, uint32_t offset,
+                          uint32_t mem_size) {
+    if (slot <= 0 || slot >= CRONOPIO_PAL_BANK_SLOTS) return -1;
+    /* The bank must fit a full 256-byte remap table starting at `offset`. */
+    if (offset > mem_size || mem_size - offset < 256u) return -1;
+    c->pal_banks[slot].offset = offset;
+    c->pal_banks[slot].used   = 1;
+    return 0;
+}
+
 int cron_gpu_tilemap(cronopio_console_t* c, int slot, uint32_t offset, int w, int h, int img, uint32_t mem_size) {
     if ((unsigned)slot >= CRONOPIO_TILEMAP_SLOTS) return -1;
     if (w <= 0 || h <= 0) return -1;
@@ -414,14 +427,24 @@ void cron_gpu_blt(cronopio_console_t* c, uint8_t* heap, int img,
     }
 }
 
+/* Full rotozoom + flip. `rotate_packed` is (rotate_deg & 0xFFFF) in low
+ * 16 bits, (flags << 16) in high 16. Flags: CRON_BLT_HFLIP / VFLIP.
+ * Flip is applied to the SOURCE sampling (mirror within the sprite's
+ * own rect), then rotation + scale apply to the flipped source. */
 void cron_gpu_blt_ex(cronopio_console_t* c, uint8_t* heap, int img,
                      int dx, int dy, int sx, int sy, int w, int h,
-                     int colkey, int rotate_deg, int scale_q16) {
+                     int colkey, int rotate_packed, int scale_q16) {
     if ((unsigned)img >= CRONOPIO_IMAGE_SLOTS || !c->images[img].used) return;
     if (w <= 0 || h <= 0 || scale_q16 == 0) return;
     cron_image_bank_t* b = &c->images[img];
     const uint8_t* src = heap + b->offset;
     uint8_t* fb = fb_of(c, heap);
+
+    /* Unpack rotate (signed 16) + flags (high 16). */
+    int rotate_deg = (int)(int16_t)(rotate_packed & 0xFFFF);
+    int flags      = (rotate_packed >> 16) & 0xFFFF;
+    int hflip      = (flags & 1);
+    int vflip      = (flags & 2);
 
     float s   = (float)scale_q16 / 65536.0f;
     float ang = (float)rotate_deg * 3.14159265358979f / 180.0f;
@@ -446,6 +469,9 @@ void cron_gpu_blt_ex(cronopio_console_t* c, uint8_t* heap, int img,
             int srcx = (int)floorf(cxs + ux);
             int srcy = (int)floorf(cys + uy);
             if (srcx < sx || srcx >= sx + w || srcy < sy || srcy >= sy + h) continue;
+            /* Apply flip in the SOURCE rect (mirror around its centre). */
+            if (hflip) srcx = (sx + w - 1) - (srcx - sx);
+            if (vflip) srcy = (sy + h - 1) - (srcy - sy);
             if (srcx < 0 || srcx >= b->w || srcy < 0 || srcy >= b->h) continue;
             uint8_t px = src[srcy * b->w + srcx];
             if (colkey >= 0 && px == (uint8_t)colkey) continue;
@@ -515,7 +541,7 @@ typedef struct {
     int16_t  scroll_y;
     uint8_t  pal_offset;
     uint8_t  flags;       /* reserved */
-    uint16_t _reserved;
+    uint16_t pal_bank;    /* 0 = identity (no swap); 1..31 = palette bank slot */
 } raster_entry_t;
 
 /* Tilemap blit with per-scanline parameter overrides. Each scanline j of the
@@ -551,6 +577,13 @@ void cron_gpu_bltm_raster(cronopio_console_t* c, uint8_t* heap, int tm,
         int cy = py / CRONOPIO_TILE_SIZE, ty0 = py % CRONOPIO_TILE_SIZE;
         int sx_line = sx + r.scroll_x;
         uint8_t pal_off = r.pal_offset;
+        /* Resolve the palette bank for this line. bank 0 or out-of-range or
+         * unbound = identity (no swap). */
+        const uint8_t *pal_bank = NULL;
+        if (r.pal_bank > 0 && r.pal_bank < CRONOPIO_PAL_BANK_SLOTS
+            && c->pal_banks[r.pal_bank].used) {
+            pal_bank = heap + c->pal_banks[r.pal_bank].offset;
+        }
         for (int i = 0; i < w; ++i) {
             int px = (sx_line + i) % map_w_px;
             if (px < 0) px += map_w_px;
@@ -565,6 +598,9 @@ void cron_gpu_bltm_raster(cronopio_console_t* c, uint8_t* heap, int tm,
             if (til_x >= ib->w || til_y >= ib->h) continue;
             uint8_t s = tiles[til_y * ib->w + til_x];
             if (colkey >= 0 && s == (uint8_t)colkey) continue;
+            /* Apply bank-remap first (full colour swap), then pal_offset
+             * (additive shift on top — useful as a gradient over the remap). */
+            if (pal_bank) s = pal_bank[s];
             put_px(c, fb, dx + i, dy + j, (uint8_t)(s + pal_off));
         }
     }

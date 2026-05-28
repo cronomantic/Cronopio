@@ -30,6 +30,7 @@ enum { CRON_ENV_OFF = 0, CRON_ENV_ATTACK, CRON_ENV_DECAY, CRON_ENV_SUSTAIN, CRON
 #define CRONOPIO_SAVE_MAX     (64u * 1024u * 1024u) /* hard cap, anti-runaway */
 #define CRONOPIO_IMAGE_SLOTS     8
 #define CRONOPIO_TILEMAP_SLOTS   8
+#define CRONOPIO_PAL_BANK_SLOTS 32       /* per-line palette remap tables — bank 0 is the identity sentinel ("no swap"); banks 1..31 are user-defined */
 #define CRONOPIO_TILE_SIZE       8
 
 /* 3D triangle submission. A vertex is 7 little-endian i32 words in cart
@@ -152,6 +153,16 @@ typedef struct {
     cron_draw_t         draw;
     cron_image_bank_t   images[CRONOPIO_IMAGE_SLOTS];
     cron_tilemap_bank_t tilemaps[CRONOPIO_TILEMAP_SLOTS];
+
+    /* Per-line palette remap tables for cron_bltm_raster (cron_raster_t.
+     * pal_bank). bank 0 is the identity (no swap); banks 1..31 are 256-byte
+     * remap tables in cart memory referenced by heap offset. used==0 means
+     * unbound — bltm_raster treats a reference to an unbound bank as
+     * identity (silent, no abort). */
+    struct {
+        uint32_t offset;
+        int      used;
+    } pal_banks[CRONOPIO_PAL_BANK_SLOTS];
 
     /* Active colormap for the textured-rasteriser accelerators (tcol/tspan):
      * a 256-byte remap in cart memory (e.g. a DOOM light colormap). When
@@ -392,6 +403,12 @@ void cron_gpu_bltm_raster(cronopio_console_t* c, uint8_t* heap, int tm,
 void cron_gpu_bltm_affine(cronopio_console_t* c, uint8_t* heap, int tm,
                           int dx, int dy, int w, int h, int colkey,
                           uint32_t table_off);
+
+/* Register a 256-byte palette remap table as bank `slot` (1..31). Bank 0
+ * is reserved as the identity sentinel and cannot be bound. Per-scanline
+ * raster tables (cron_raster_t.pal_bank) reference these by index. */
+int cron_gpu_palette_bank(cronopio_console_t* c, int slot, uint32_t offset,
+                          uint32_t mem_size);
 
 /* Rotozoom blit: like blt, but the sprite is scaled (scale_q16, Q16.16,
  * 0x10000 = 1.0) and rotated (rotate_deg, clockwise) around its centre,

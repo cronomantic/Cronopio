@@ -132,6 +132,10 @@ extern void     cvm_sys_cron_bltm_affine (int32_t tm, int32_t dx, int32_t dy, in
 extern void     cvm_sys_cron_blt_flip    (int32_t img, int32_t dx, int32_t dy, int32_t srcpack, int32_t dimpack, int32_t colkey, int32_t flags);
 /* blt_scale: sprite blit with variable scale + flip. No rotate. 8 args. */
 extern void     cvm_sys_cron_blt_scale   (int32_t img, int32_t dx, int32_t dy, int32_t srcpack, int32_t dimpack, int32_t colkey, int32_t scale_q16, int32_t flags);
+/* palette_bank: register a 256-byte palette-remap table as a bank slot
+ * (1..31; bank 0 is the identity sentinel). Referenced per-scanline by
+ * cron_raster_t.pal_bank in cron_bltm_raster. */
+extern void     cvm_sys_cron_palette_bank(int32_t slot, const uint8_t* table);
 extern void     cvm_sys_cron_rectb       (int32_t x, int32_t y, int32_t w, int32_t h, int32_t color);
 extern void     cvm_sys_cron_circ        (int32_t x, int32_t y, int32_t r, int32_t color);
 extern void     cvm_sys_cron_circb       (int32_t x, int32_t y, int32_t r, int32_t color);
@@ -282,12 +286,16 @@ static inline void     cron_bltm        (int32_t tm, int32_t dx, int32_t dy, int
 #define CRON_TILE_VFLIP    0x4000u
 #define CRON_TILE_IDX_MASK 0x3FFFu
 
+/* Per-scanline parameters for cron_bltm_raster. 8 bytes, aligned for
+ * direct indexing. pal_bank == 0 = identity (no swap); 1..31 = bank slot
+ * registered via cron_palette_bank. pal_offset is additive on top of the
+ * (optional) bank remap. */
 typedef struct cron_raster {
     int16_t  scroll_x;
     int16_t  scroll_y;
     uint8_t  pal_offset;
     uint8_t  flags;
-    uint16_t _pad;
+    uint16_t pal_bank;
 } cron_raster_t;
 
 typedef struct cron_affine {
@@ -330,6 +338,15 @@ static inline void cron_blt_scale(int32_t img, int32_t dx, int32_t dy,
     int32_t dim = (w  & 0xFFFF) | (h  << 16);
     cvm_sys_cron_blt_scale(img, dx, dy, src, dim, colkey, scale_q16, flags);
 }
+
+/* Register a 256-byte palette remap as bank `slot` (1..31). Bank 0 is
+ * the identity sentinel — passing it as slot is a no-op. The same `table`
+ * pointer is read every frame by the rasteriser, so the cart can mutate
+ * the bank in place without re-registering. */
+#define CRON_PAL_BANK_MAX 31     /* slots 1..CRON_PAL_BANK_MAX */
+static inline void cron_palette_bank(int32_t slot, const uint8_t* table) {
+    cvm_sys_cron_palette_bank(slot, table);
+}
 static inline void     cron_rectb       (int32_t x, int32_t y, int32_t w, int32_t h, int32_t c) { cvm_sys_cron_rectb(x, y, w, h, c); }
 static inline void     cron_circ        (int32_t x, int32_t y, int32_t r, int32_t c) { cvm_sys_cron_circ(x, y, r, c); }
 static inline void     cron_circb       (int32_t x, int32_t y, int32_t r, int32_t c) { cvm_sys_cron_circb(x, y, r, c); }
@@ -346,7 +363,14 @@ static inline void     cron_pal         (int32_t c0, int32_t c1) { cvm_sys_cron_
 static inline void     cron_pal_reset   (void) { cvm_sys_cron_pal_reset(); }
 
 /* Rotozoom blit: scale is Q16.16 (0x10000 = 1.0), rotate in degrees
- * clockwise, both around the sprite centre (placed at dx+w/2, dy+h/2). */
+ * clockwise, both around the sprite centre (placed at dx+w/2, dy+h/2).
+ *
+ * NOTE on the `rotate` arg's encoding: to fit a flip-flags param within
+ * the 8-arg syscall ABI without adding a new syscall, `rotate` is packed
+ * as `(rotate_deg & 0xFFFF) | (flags << 16)`. The wrapper below masks
+ * rotate to 16 bits (preserves any signed angle in -32768..32767 which
+ * is ±91 full turns — plenty) and leaves flags = 0. Use
+ * cron_blt_ex_flip below to set the flags. */
 #define CRON_SCALE_1X  (0x10000)
 static inline void     cron_blt_ex      (int32_t img, int32_t dx, int32_t dy,
                                          int32_t sx, int32_t sy, int32_t w, int32_t h,
@@ -354,7 +378,23 @@ static inline void     cron_blt_ex      (int32_t img, int32_t dx, int32_t dy,
     cvm_sys_cron_blt_ex(img, dx, dy,
                         (int32_t)(((uint32_t)sx << 16) | ((uint32_t)sy & 0xFFFFu)),
                         (int32_t)(((uint32_t)w  << 16) | ((uint32_t)h  & 0xFFFFu)),
-                        colkey, rotate, scale_q16);
+                        colkey,
+                        (int32_t)((uint32_t)rotate & 0xFFFFu),    /* flags = 0 */
+                        scale_q16);
+}
+
+/* Full rotozoom + HFLIP/VFLIP. flags = CRON_BLT_HFLIP | CRON_BLT_VFLIP. */
+static inline void cron_blt_ex_flip(int32_t img, int32_t dx, int32_t dy,
+                                    int32_t sx, int32_t sy, int32_t w, int32_t h,
+                                    int32_t colkey, int32_t rotate, int32_t scale_q16,
+                                    int32_t flags) {
+    cvm_sys_cron_blt_ex(img, dx, dy,
+                        (int32_t)(((uint32_t)sx << 16) | ((uint32_t)sy & 0xFFFFu)),
+                        (int32_t)(((uint32_t)w  << 16) | ((uint32_t)h  & 0xFFFFu)),
+                        colkey,
+                        (int32_t)(((uint32_t)rotate & 0xFFFFu)
+                                  | ((uint32_t)flags << 16)),
+                        scale_q16);
 }
 
 /* Software-3D rasteriser accelerators (DOOM-style). cron_cmap sets the
