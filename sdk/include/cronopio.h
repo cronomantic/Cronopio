@@ -136,6 +136,11 @@ extern void     cvm_sys_cron_blt_scale   (int32_t img, int32_t dx, int32_t dy, i
  * (1..31; bank 0 is the identity sentinel). Referenced per-scanline by
  * cron_raster_t.pal_bank in cron_bltm_raster. */
 extern void     cvm_sys_cron_palette_bank(int32_t slot, const uint8_t* table);
+/* tile_anim: register an array of cron_tile_anim_t for an image bank.
+ * Each entry tells bltm/bltm_raster/bltm_affine to substitute matching
+ * tile indices through a frame cycle driven by the host's frame counter.
+ * count=0 (or table=NULL) clears the bank's anim. */
+extern void     cvm_sys_cron_tile_anim   (int32_t img_slot, const void* table, int32_t count);
 extern void     cvm_sys_cron_rectb       (int32_t x, int32_t y, int32_t w, int32_t h, int32_t color);
 extern void     cvm_sys_cron_circ        (int32_t x, int32_t y, int32_t r, int32_t color);
 extern void     cvm_sys_cron_circb       (int32_t x, int32_t y, int32_t r, int32_t color);
@@ -346,6 +351,34 @@ static inline void cron_blt_scale(int32_t img, int32_t dx, int32_t dy,
 #define CRON_PAL_BANK_MAX 31     /* slots 1..CRON_PAL_BANK_MAX */
 static inline void cron_palette_bank(int32_t slot, const uint8_t* table) {
     cvm_sys_cron_palette_bank(slot, table);
+}
+
+/* Tile animation. Each entry says "wherever a tilemap cell's tile index
+ * (low 14 bits of the cell — flip flags are preserved across the
+ * substitution) matches src_tile in the bank `img_slot`, substitute the
+ * current frame's tile from `frames[]`". Current frame =
+ * (host_frame_count / period_frames) MOD num_frames.
+ *
+ * The host walks the bank's anim table per sampled cell. With <16 anims
+ * per bank the cost is negligible; for hot tilemaps with many anims a
+ * cart can split tiles across multiple banks to keep each table small.
+ *
+ * Both the table and the per-anim frames arrays live in cart heap; the
+ * host re-reads them every frame, so a cart that wants to retime an
+ * anim on the fly just mutates the period_frames field — no
+ * re-register needed. */
+typedef struct cron_tile_anim {
+    uint16_t  src_tile;       /* match cell's tile index (post-mask) */
+    uint16_t  period_frames;  /* >= 1 */
+    uint16_t  num_frames;     /* >= 1 */
+    uint16_t  _pad;
+    const uint16_t* frames;   /* heap ptr to a u16[num_frames] array */
+} cron_tile_anim_t;
+
+static inline void cron_tile_anim(int32_t img_slot,
+                                  const cron_tile_anim_t* table,
+                                  int32_t count) {
+    cvm_sys_cron_tile_anim(img_slot, (const void*)table, count);
 }
 static inline void     cron_rectb       (int32_t x, int32_t y, int32_t w, int32_t h, int32_t c) { cvm_sys_cron_rectb(x, y, w, h, c); }
 static inline void     cron_circ        (int32_t x, int32_t y, int32_t r, int32_t c) { cvm_sys_cron_circ(x, y, r, c); }

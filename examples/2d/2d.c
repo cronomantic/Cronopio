@@ -47,6 +47,21 @@ static cron_affine_t affine_table[CRON_SCREEN_H];   /* Mode-7 perspective */
 static uint8_t sunset_remap[256];
 static uint8_t dusk_remap[256];
 
+/* Tile animation: floor tile 5 cycles through {4, 5, 6, 7} every 8 host
+ * frames — so the entire animated floor checkerboard visibly "flickers"
+ * through four patterns once per ~32 frames. Exercises the tile-anim
+ * substitution path through cron_bltm_affine (Mode-7). */
+static const uint16_t floor_anim_frames[] = { 4, 5, 6, 7 };
+static const cron_tile_anim_t floor_anim_table[] = {
+    {
+        .src_tile      = 5,
+        .period_frames = 8,
+        .num_frames    = 4,
+        ._pad          = 0,
+        .frames        = floor_anim_frames,
+    },
+};
+
 /* ---------------------------------------------------------------------- */
 /* Asset build */
 
@@ -290,6 +305,8 @@ int main(void) {
     build_palette_banks();
     cron_palette_bank(1, sunset_remap);
     cron_palette_bank(2, dusk_remap);
+    cron_tile_anim(0, floor_anim_table,
+                   sizeof floor_anim_table / sizeof floor_anim_table[0]);
 
     /* Register banks:
      *   image slot 0 = the sprite (16x16)

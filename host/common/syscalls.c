@@ -302,6 +302,13 @@ static int sys_palette_bank(struct cvm_image *img, int32_t *r, void *ud) {
     cron_gpu_palette_bank(X->c, (int)r[0], (uint32_t)r[1], X->img->mem_size);
     r[0] = 0; return 0;
 }
+/* sys_tile_anim — registers a cron_tile_anim_t table for an image bank.
+ * 3 args: (img_slot, table_offset, count). count==0 clears. */
+static int sys_tile_anim(struct cvm_image *img, int32_t *r, void *ud) {
+    (void)img; GUARD;
+    cron_gpu_tile_anim(X->c, (int)r[0], (uint32_t)r[1], (int)r[2]);
+    r[0] = 0; return 0;
+}
 
 /* sys_bltm_affine — 6 args (R0..R5). w/h packed as a single i16 pair. */
 static int sys_bltm_affine(struct cvm_image *img, int32_t *r, void *ud) {
@@ -835,6 +842,7 @@ static const entry_t kSyscalls[] = {
     { "cvm_sys_cron_blt_flip",     sys_blt_flip     },
     { "cvm_sys_cron_blt_scale",    sys_blt_scale    },
     { "cvm_sys_cron_palette_bank", sys_palette_bank },
+    { "cvm_sys_cron_tile_anim",    sys_tile_anim    },
     /* extended graphics: shapes */
     { "cvm_sys_cron_rectb",        sys_rectb        },
     { "cvm_sys_cron_circ",         sys_circ         },

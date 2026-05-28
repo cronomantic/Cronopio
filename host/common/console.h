@@ -164,6 +164,17 @@ typedef struct {
         int      used;
     } pal_banks[CRONOPIO_PAL_BANK_SLOTS];
 
+    /* Per-image-bank tile-animation tables. When a tilemap cell's tile
+     * index matches an anim's `src_tile`, the bltm family substitutes
+     * the current frame's tile index (computed from frame_count and the
+     * anim's period_frames). Anim disabled when offset==0 or count==0;
+     * tablesize bound by the cart but typically <16 anims per bank. The
+     * table itself is an array of cron_tile_anim_t in cart heap. */
+    struct {
+        uint32_t table_offset;
+        int      count;
+    } tile_anims[CRONOPIO_IMAGE_SLOTS];
+
     /* Active colormap for the textured-rasteriser accelerators (tcol/tspan):
      * a 256-byte remap in cart memory (e.g. a DOOM light colormap). When
      * cmap_set is 0 the accelerators write source indices unremapped. */
@@ -409,6 +420,14 @@ void cron_gpu_bltm_affine(cronopio_console_t* c, uint8_t* heap, int tm,
  * raster tables (cron_raster_t.pal_bank) reference these by index. */
 int cron_gpu_palette_bank(cronopio_console_t* c, int slot, uint32_t offset,
                           uint32_t mem_size);
+
+/* Register a tile-animation table for image bank `img_slot`. The table is
+ * an array of `count` cron_tile_anim_t entries at heap+table_offset; each
+ * entry says "tilemap cells whose tile_idx == src_tile substitute through
+ * frames[(frame_count / period) MOD num_frames]". count=0 (or
+ * table_offset=0) clears the bank's anim. Returns 0 on success. */
+int cron_gpu_tile_anim(cronopio_console_t* c, int img_slot,
+                       uint32_t table_offset, int count);
 
 /* Rotozoom blit: like blt, but the sprite is scaled (scale_q16, Q16.16,
  * 0x10000 = 1.0) and rotated (rotate_deg, clockwise) around its centre,

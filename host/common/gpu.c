@@ -390,6 +390,47 @@ int cron_gpu_palette_bank(cronopio_console_t* c, int slot, uint32_t offset,
     return 0;
 }
 
+/* Tile-anim table entry — matches sdk/include/cronopio.h cron_tile_anim_t.
+ * 16 bytes; the frames array (u16[num_frames]) lives separately at
+ * heap+frames_offset. */
+typedef struct {
+    uint16_t src_tile;       /* the cell's tile-idx (post HFLIP/VFLIP mask) */
+    uint16_t period_frames;  /* >= 1; how many host frames between advances */
+    uint16_t num_frames;     /* >= 1 */
+    uint16_t _pad;
+    uint32_t frames_offset;  /* heap offset to u16[num_frames] */
+} tile_anim_t;
+
+int cron_gpu_tile_anim(cronopio_console_t* c, int img_slot,
+                       uint32_t table_offset, int count) {
+    if ((unsigned)img_slot >= CRONOPIO_IMAGE_SLOTS) return -1;
+    if (count < 0) return -1;
+    c->tile_anims[img_slot].table_offset = (count > 0) ? table_offset : 0;
+    c->tile_anims[img_slot].count        = (count > 0) ? count : 0;
+    return 0;
+}
+
+/* Lookup helper: given a tilemap cell's masked tile index, return the
+ * substituted index from any matching anim, or the original. Hot-path
+ * inline-able: returns fast when the bank has no anims. */
+static inline int subst_tile(cronopio_console_t* c, uint8_t* heap,
+                             int img_slot, int idx) {
+    int n = c->tile_anims[img_slot].count;
+    if (n <= 0) return idx;
+    const tile_anim_t* anims =
+        (const tile_anim_t*)(heap + c->tile_anims[img_slot].table_offset);
+    for (int k = 0; k < n; ++k) {
+        if (anims[k].src_tile != idx) continue;
+        if (anims[k].num_frames == 0 || anims[k].period_frames == 0) return idx;
+        uint32_t step = c->frame_count / anims[k].period_frames;
+        int fi = (int)(step % anims[k].num_frames);
+        const uint16_t* frames =
+            (const uint16_t*)(heap + anims[k].frames_offset);
+        return frames[fi] & 0x3FFFu;   /* in case the table embeds flip flags */
+    }
+    return idx;
+}
+
 int cron_gpu_tilemap(cronopio_console_t* c, int slot, uint32_t offset, int w, int h, int img, uint32_t mem_size) {
     if ((unsigned)slot >= CRONOPIO_TILEMAP_SLOTS) return -1;
     if (w <= 0 || h <= 0) return -1;
@@ -523,7 +564,7 @@ void cron_gpu_bltm(cronopio_console_t* c, uint8_t* heap, int tm,
             if (cell == CELL_EMPTY) continue;
             int tx = (cell & CELL_HFLIP) ? (CRONOPIO_TILE_SIZE - 1 - tx0) : tx0;
             int ty = (cell & CELL_VFLIP) ? (CRONOPIO_TILE_SIZE - 1 - ty0) : ty0;
-            int idx = cell & CELL_IDX_MASK;
+            int idx = subst_tile(c, heap, m->img, cell & CELL_IDX_MASK);
             int til_x = (idx % tpr) * CRONOPIO_TILE_SIZE + tx;
             int til_y = (idx / tpr) * CRONOPIO_TILE_SIZE + ty;
             if (til_x >= ib->w || til_y >= ib->h) continue;
@@ -592,7 +633,7 @@ void cron_gpu_bltm_raster(cronopio_console_t* c, uint8_t* heap, int tm,
             if (cell == CELL_EMPTY) continue;
             int tx = (cell & CELL_HFLIP) ? (CRONOPIO_TILE_SIZE - 1 - tx0) : tx0;
             int ty = (cell & CELL_VFLIP) ? (CRONOPIO_TILE_SIZE - 1 - ty0) : ty0;
-            int idx = cell & CELL_IDX_MASK;
+            int idx = subst_tile(c, heap, m->img, cell & CELL_IDX_MASK);
             int til_x = (idx % tpr) * CRONOPIO_TILE_SIZE + tx;
             int til_y = (idx / tpr) * CRONOPIO_TILE_SIZE + ty;
             if (til_x >= ib->w || til_y >= ib->h) continue;
@@ -649,7 +690,7 @@ void cron_gpu_bltm_affine(cronopio_console_t* c, uint8_t* heap, int tm,
             if (cell == CELL_EMPTY) continue;
             int tx = (cell & CELL_HFLIP) ? (CRONOPIO_TILE_SIZE - 1 - tx0) : tx0;
             int ty = (cell & CELL_VFLIP) ? (CRONOPIO_TILE_SIZE - 1 - ty0) : ty0;
-            int idx = cell & CELL_IDX_MASK;
+            int idx = subst_tile(c, heap, m->img, cell & CELL_IDX_MASK);
             int til_x = (idx % tpr) * CRONOPIO_TILE_SIZE + tx;
             int til_y = (idx / tpr) * CRONOPIO_TILE_SIZE + ty;
             if (til_x >= ib->w || til_y >= ib->h) continue;
