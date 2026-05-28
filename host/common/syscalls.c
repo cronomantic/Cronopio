@@ -624,6 +624,49 @@ static int sys_mouse(struct cvm_image *img, int32_t *r, void *ud) {
     return 0;
 }
 
+/* Consume motion accumulated since the previous call (zeroes the accumulator
+ * on read). Works in both absolute and relative mode — gives the cart raw
+ * mouselook deltas in cart coords regardless. */
+static int sys_mouse_delta(struct cvm_image *img, int32_t *r, void *ud) {
+    ctx_t   *x = (ctx_t*)ud;
+    uint32_t ax = (uint32_t)r[0];
+    uint32_t ay = (uint32_t)r[1];
+    int32_t  dx, dy;
+    cron_input_consume_mouse_delta(x->c, &dx, &dy);
+    if (ax) cvm_heap_write(img, ax, &dx, sizeof(dx));
+    if (ay) cvm_heap_write(img, ay, &dy, sizeof(dy));
+    r[0] = 0;
+    return 0;
+}
+
+/* Consume accumulated wheel ticks (+ = wheel up / away from user). */
+static int sys_mouse_wheel(struct cvm_image *img, int32_t *r, void *ud) {
+    (void)img;
+    ctx_t *x = (ctx_t*)ud;
+    r[0] = cron_input_consume_mouse_wheel(x->c);
+    return 0;
+}
+
+/* Show/hide the OS cursor. Idempotent; the desktop host syncs the SDL state
+ * once per frame in sync_mouse_mode. Headless hosts ignore the flag. */
+static int sys_cursor(struct cvm_image *img, int32_t *r, void *ud) {
+    (void)img;
+    ctx_t *x = (ctx_t*)ud;
+    cron_input_set_cursor_visible(x->c, (int)r[0]);
+    r[0] = 0;
+    return 0;
+}
+
+/* Toggle SDL relative-mouse mode (mouselook): hides + locks the cursor,
+ * deltas keep coming in via cron_mouse_delta. */
+static int sys_mouse_relative(struct cvm_image *img, int32_t *r, void *ud) {
+    (void)img;
+    ctx_t *x = (ctx_t*)ud;
+    cron_input_set_mouse_relative(x->c, (int)r[0]);
+    r[0] = 0;
+    return 0;
+}
+
 /* ------ persistence ----------------------------------------------------- */
 
 static int sys_save_read(struct cvm_image *img, int32_t *r, void *ud) {
@@ -726,6 +769,10 @@ static const entry_t kSyscalls[] = {
     { "cvm_sys_cron_pad_pressed",  sys_pad_pressed  },
     { "cvm_sys_cron_pad_released", sys_pad_released },
     { "cvm_sys_cron_mouse",        sys_mouse        },
+    { "cvm_sys_cron_mouse_delta",  sys_mouse_delta  },
+    { "cvm_sys_cron_mouse_wheel",  sys_mouse_wheel  },
+    { "cvm_sys_cron_cursor",       sys_cursor       },
+    { "cvm_sys_cron_mouse_relative", sys_mouse_relative },
     /* persistence */
     { "cvm_sys_cron_save_read",    sys_save_read    },
     { "cvm_sys_cron_save_write",   sys_save_write   },

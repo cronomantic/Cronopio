@@ -67,6 +67,11 @@ typedef struct {
     char                base_path[1024];   /* host exe dir (trailing sep), for relative save_dir */
     menu_t             *menu;
 
+    /* Last applied mouse mode — re-sync only when the cart's console state
+     * actually flips, to avoid spamming SDL each frame. -1 = "never set". */
+    int                 last_cursor_visible;
+    int                 last_mouse_relative;
+
     int                 running;
 } app_t;
 
@@ -420,6 +425,23 @@ static void toggle_menu(app_t* a) {
     }
 }
 
+/* Apply the cart's requested cursor / relative-mode state to SDL whenever it
+ * changes. While the menu is open we force the cursor visible and relative
+ * mode off so the user can navigate; the cart-set state is restored on close. */
+static void sync_mouse_mode(app_t* a) {
+    int menu_open = menu_is_open(a->menu);
+    int want_cursor = (menu_open || !a->has_cart) ? 1 : a->console->cursor_visible;
+    int want_rel    = (menu_open || !a->has_cart) ? 0 : a->console->mouse_relative;
+    if (want_cursor != a->last_cursor_visible) {
+        SDL_ShowCursor(want_cursor ? SDL_ENABLE : SDL_DISABLE);
+        a->last_cursor_visible = want_cursor;
+    }
+    if (want_rel != a->last_mouse_relative) {
+        SDL_SetRelativeMouseMode(want_rel ? SDL_TRUE : SDL_FALSE);
+        a->last_mouse_relative = want_rel;
+    }
+}
+
 static void tick(void* arg) {
     app_t* a = (app_t*)arg;
     int was_open = menu_is_open(a->menu);
@@ -458,13 +480,32 @@ static void tick(void* arg) {
             int my = (a->dst.h > 0) ? (ev.motion.y - a->dst.y) * CRONOPIO_SCREEN_H / a->dst.h : 0;
             if (mx < 0) mx = 0; else if (mx >= CRONOPIO_SCREEN_W) mx = CRONOPIO_SCREEN_W - 1;
             if (my < 0) my = 0; else if (my >= CRONOPIO_SCREEN_H) my = CRONOPIO_SCREEN_H - 1;
-            a->console->mouse_x = mx;
-            a->console->mouse_y = my;
+            /* Scale SDL's relative deltas (window pixels) to cart deltas the
+             * same way absolutes are scaled — keeps mouselook sensitivity
+             * independent of the window size. */
+            int dx = (a->dst.w > 0) ? ev.motion.xrel * CRONOPIO_SCREEN_W / a->dst.w : 0;
+            int dy = (a->dst.h > 0) ? ev.motion.yrel * CRONOPIO_SCREEN_H / a->dst.h : 0;
+            cron_input_mouse_motion(a->console, mx, my, dx, dy);
         }
         if (ev.type == SDL_MOUSEBUTTONDOWN || ev.type == SDL_MOUSEBUTTONUP) {
-            uint32_t bit = (ev.button.button == SDL_BUTTON_LEFT) ? 1u : 2u;
-            if (ev.type == SDL_MOUSEBUTTONDOWN) a->console->mouse_buttons |=  bit;
-            else                                a->console->mouse_buttons &= ~bit;
+            int b;
+            switch (ev.button.button) {
+                case SDL_BUTTON_LEFT:   b = 0; break;
+                case SDL_BUTTON_RIGHT:  b = 1; break;
+                case SDL_BUTTON_MIDDLE: b = 2; break;
+                case SDL_BUTTON_X1:     b = 3; break;
+                case SDL_BUTTON_X2:     b = 4; break;
+                default: continue;
+            }
+            cron_input_mouse_button(a->console, b, ev.type == SDL_MOUSEBUTTONDOWN);
+        }
+        if (ev.type == SDL_MOUSEWHEEL) {
+            /* SDL_MOUSEWHEEL.y: +1 wheel-up (away from user), -1 wheel-down.
+             * SDL_MOUSEWHEEL_FLIPPED negates the sign — undo it so carts see
+             * a consistent "+ = up". */
+            int y = ev.wheel.y;
+            if (ev.wheel.direction == SDL_MOUSEWHEEL_FLIPPED) y = -y;
+            cron_input_mouse_wheel(a->console, y);
         }
     }
 
@@ -474,6 +515,7 @@ static void tick(void* arg) {
     if (was_open && !is_open)
         hostcfg_save(&a->cfg, a->cfg_path);
 
+    sync_mouse_mode(a);   /* before the cart frame so it sees the right state */
     if (!is_open && a->has_cart && !a->console->cart_exited)
         run_cart_frame(a);
     present_all(a);
@@ -496,6 +538,8 @@ int main(int argc, char** argv) {
     app.running  = 1;
     app.has_cart = 0;
     app.menu     = NULL;
+    app.last_cursor_visible = -1;   /* force sync_mouse_mode on first frame */
+    app.last_mouse_relative = -1;
 
     /* Config: defaults, then overlay cronopio.cfg from beside the executable. */
     hostcfg_defaults(&app.cfg);

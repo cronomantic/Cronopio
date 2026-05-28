@@ -98,6 +98,10 @@ extern uint32_t cvm_sys_cron_pad         (int32_t player);
 extern uint32_t cvm_sys_cron_pad_pressed (int32_t player);
 extern uint32_t cvm_sys_cron_pad_released(int32_t player);
 extern uint32_t cvm_sys_cron_mouse       (int32_t* out_x, int32_t* out_y);
+extern void     cvm_sys_cron_mouse_delta (int32_t* out_dx, int32_t* out_dy);
+extern int32_t  cvm_sys_cron_mouse_wheel (void);
+extern void     cvm_sys_cron_cursor      (int32_t show);
+extern void     cvm_sys_cron_mouse_relative(int32_t enable);
 
 extern int32_t  cvm_sys_cron_save_read   (uint8_t* dst, int32_t len);
 extern int32_t  cvm_sys_cron_save_write  (const uint8_t* src, int32_t len);
@@ -219,7 +223,23 @@ static inline void     cron_music_volume   (int32_t vol)                  { cvm_
 static inline uint32_t cron_pad         (int32_t p)                       { return cvm_sys_cron_pad(p); }
 static inline uint32_t cron_pad_pressed (int32_t p)                       { return cvm_sys_cron_pad_pressed(p); }
 static inline uint32_t cron_pad_released(int32_t p)                       { return cvm_sys_cron_pad_released(p); }
+/* Absolute mouse position in cart 320x240 coords + button bitmask
+ * (1=L, 2=R, 4=M, 8=X1, 16=X2). x/y may be NULL. In relative-mouse mode the
+ * absolute position is meaningless (SDL locks the cursor) — use cron_mouse_delta. */
 static inline uint32_t cron_mouse       (int32_t* x, int32_t* y)          { return cvm_sys_cron_mouse(x, y); }
+/* Accumulated relative motion since the previous call (in cart coords). The
+ * host clears the accumulator on read, so each call reports motion since
+ * the last. Works in both absolute and relative-mouse mode. */
+static inline void     cron_mouse_delta (int32_t* dx, int32_t* dy)        { cvm_sys_cron_mouse_delta(dx, dy); }
+/* Accumulated wheel ticks since the previous call (+ = wheel up / away from
+ * the user); cleared on read. */
+static inline int32_t  cron_mouse_wheel (void)                            { return cvm_sys_cron_mouse_wheel(); }
+/* Show/hide the OS cursor (so the cart can draw its own pixelated one). */
+static inline void     cron_cursor      (int32_t show)                    { cvm_sys_cron_cursor(show); }
+/* Enable SDL relative-mouse mode (mouselook): the OS cursor is hidden +
+ * locked, and motion keeps flowing as deltas via cron_mouse_delta. The
+ * absolute position from cron_mouse stops updating while this is on. */
+static inline void     cron_mouse_relative(int32_t enable)                { cvm_sys_cron_mouse_relative(enable); }
 
 static inline int32_t  cron_save_read   (uint8_t* d, int32_t n)           { return cvm_sys_cron_save_read(d, n); }
 static inline int32_t  cron_save_write  (const uint8_t* s, int32_t n)     { return cvm_sys_cron_save_write(s, n); }

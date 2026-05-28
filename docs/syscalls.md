@@ -126,7 +126,11 @@ track plays at a time. See [audio.md](audio.md) Layer 4.
 | `cvm_sys_cron_pad`            | `u32(i32 player)`               | Returns button bitmask (see below)       |
 | `cvm_sys_cron_pad_pressed`    | `u32(i32 player)`               | Buttons pressed this frame               |
 | `cvm_sys_cron_pad_released`   | `u32(i32 player)`               | Buttons released this frame              |
-| `cvm_sys_cron_mouse`          | `u32(i32* out_x, i32* out_y)`   | Writes x,y; returns button bitmask       |
+| `cvm_sys_cron_mouse`          | `u32(i32* out_x, i32* out_y)`   | Writes absolute position in cart 320×240 coords (NULL ok); returns button bitmask (1=L, 2=R, 4=M, 8=X1, 16=X2). In relative mode the position is meaningless — read deltas instead. |
+| `cvm_sys_cron_mouse_delta`    | `void(i32* out_dx, i32* out_dy)`| Accumulated relative motion since the previous call (in cart coords); the host zeroes the accumulator on read. Works in both absolute and relative-mouse mode. |
+| `cvm_sys_cron_mouse_wheel`    | `i32()`                         | Accumulated vertical wheel ticks since the previous call (+ = wheel up / away from user); cleared on read |
+| `cvm_sys_cron_cursor`         | `void(i32 show)`                | Show (`1`) / hide (`0`) the OS cursor — for carts that draw their own pixelated cursor. Default: visible. While the F1 menu is open the host forces it visible. |
+| `cvm_sys_cron_mouse_relative` | `void(i32 enable)`              | Toggle SDL relative-mouse mode (mouselook): hides + locks the cursor, deltas keep flowing via `cron_mouse_delta`. Default: off. Forced off while the F1 menu is open. |
 
 ## Persistence
 

@@ -204,8 +204,15 @@ typedef struct {
     /* input snapshot */
     uint32_t pad_cur[CRONOPIO_PAD_COUNT];
     uint32_t pad_prev[CRONOPIO_PAD_COUNT];
-    int32_t  mouse_x, mouse_y;
-    uint32_t mouse_buttons;
+    int32_t  mouse_x, mouse_y;             /* absolute pos in cart 320x240 coords */
+    uint32_t mouse_buttons;                /* bitmask: 1=L, 2=R, 4=M, 8=X1, 16=X2 */
+    /* Relative motion + wheel — host accumulates between cart reads; cron_mouse_delta
+     * and cron_mouse_wheel zero them on read (consume-then-reset). Independent of the
+     * relative-mode toggle: even in absolute mode, a cart can read deltas if it wants. */
+    int32_t  mouse_dx, mouse_dy;           /* accumulated relative motion (cart coords) */
+    int32_t  mouse_wheel;                  /* accumulated vertical wheel ticks (+=up) */
+    int      cursor_visible;               /* host shows OS cursor when 1 (default) */
+    int      mouse_relative;               /* SDL relative-mouse mode when 1 (mouselook) */
 
     /* timing */
     uint64_t boot_ms;
@@ -303,6 +310,17 @@ void     cron_input_set_pad     (cronopio_console_t* c, int player, uint32_t mas
 uint32_t cron_input_pad         (const cronopio_console_t* c, int player);
 uint32_t cron_input_pad_pressed (const cronopio_console_t* c, int player);
 uint32_t cron_input_pad_released(const cronopio_console_t* c, int player);
+
+/* Mouse — see [docs/syscalls.md]: the host pushes motion / buttons / wheel,
+ * the cart consumes deltas via cron_mouse_delta / cron_mouse_wheel (which
+ * reset the accumulators on read), and toggles cursor + relative mode. */
+void     cron_input_mouse_motion        (cronopio_console_t* c, int abs_x, int abs_y, int dx, int dy);
+void     cron_input_mouse_button        (cronopio_console_t* c, int button, int down);
+void     cron_input_mouse_wheel         (cronopio_console_t* c, int ticks);
+void     cron_input_set_cursor_visible  (cronopio_console_t* c, int show);
+void     cron_input_set_mouse_relative  (cronopio_console_t* c, int enable);
+void     cron_input_consume_mouse_delta (cronopio_console_t* c, int32_t* dx, int32_t* dy);
+int32_t  cron_input_consume_mouse_wheel (cronopio_console_t* c);
 
 /* GPU primitives. All take the console (for fb offset + draw state: clip,
  * camera, palette remap) and the heap base. Coordinates are in world space;
