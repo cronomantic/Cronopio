@@ -48,14 +48,29 @@ int main(void) {
 ## Options
 
 ```
-2dpak <input.bmp> <output.h> [--prefix=NAME] [--max-pal=N]
+2dpak <input.{png,bmp}> <output.h> [--prefix=NAME] [--max-pal=N] [--rom]
+2dpak --tilemap <input.tmx> <output.h>           [--prefix=NAME] [--rom]
+2dpak --selftest <output.bmp>
 ```
 
 - `--prefix=NAME` — sets the C symbol prefix. Default: derived from the
-  output filename's basename (e.g. `tileset.h` → `TILESET`).
-- `--max-pal=N` — clamps palette emission. Default 32 (Cronopio's
-  palette size). Set higher if your cart manages a larger working set
-  off-screen.
+  output filename's basename (e.g. `tileset.h` → `TILESET`). A leading
+  digit gets a `_` prepended to keep the C identifier valid.
+- `--max-pal=N` — clamps palette emission and is the target palette
+  count for the median-cut quantizer (when input is truecolour). Default
+  32 (Cronopio's palette size). Set higher if your cart manages a larger
+  working set off-screen.
+- `--rom` — write a binary blob (`2DPK` magic for images, `TMAP` magic
+  for tilemaps) instead of a C header. Pair with `cvm-cc --rom=FILE`
+  at cart-build time so `cron_rom()` returns the blob; parse via
+  `sdk/include/cron_2dpak.h` (`cron_2dpak_parse_image` /
+  `cron_2dpak_parse_tilemap`). Use this once your asset bloats the .c
+  (typically past a couple hundred KB of pixels).
+- `--tilemap` — input is a Tiled (.tmx) map exported with CSV layer
+  format (Edit → Preferences → "Tile Layer Format: CSV"). GIDs are
+  remapped to Cronopio's 14-bit indices (Tiled is 1-based, we're
+  0-based; flip bits in GID bits 30/31 become the cell's bits 14/15).
+  Anti-diagonal flip (bit 29) isn't representable and emits a warning.
 
 ## Self-test
 
@@ -66,16 +81,23 @@ int main(void) {
 
 ## Limits / what's NOT done yet
 
-- **No tilemap import.** For small maps the cart hand-writes the u16
-  array; for big maps a future `--tilemap=tiled.tmx` mode would parse
-  Tiled XML. Add when first port hits a 50+ cell map.
-- **No animation table import.** Same reasoning — hand-write small
-  `cron_tile_anim_t` tables until the first port asks for it.
-- **No quantization.** Input must be already-indexed with <= 32 colours.
-  GIMP "Image → Mode → Indexed (palette: 32 colours)" does the right
-  thing in one click; same with Aseprite's native indexed mode. A
-  truecolour PNG is rejected with a clear message.
-- **Output is a header, not a ROM blob.** When asset size starts
-  bloating the .c (multi-MB), add a `--rom` mode that writes a binary
-  consumable by `--rom=FILE` at cart-build time. Until then the C
-  literal is fine and integrates naturally with `cvm-cc`.
+- **No animation table import.** Hand-write small `cron_tile_anim_t`
+  tables until the first port asks for it. Tiled has tile-animation
+  metadata in `.tsx` files — could be parsed when needed.
+- **Tiled CSV encoding only.** Base64 + zlib/gzip needs DEFLATE; only
+  the CSV encoding is supported. Export your TMX with "Tile Layer
+  Format: CSV" (Tiled's Preferences). Other encodings emit a clear
+  "re-export as CSV" message.
+- **Tiled anti-diagonal flip not supported.** GID bit 29 (rotated 90°)
+  isn't representable in Cronopio's HFLIP/VFLIP-only cell layout.
+  Emits a warning and renders without flip; in practice arcade-style
+  maps rarely use 90° rotation.
+- **Multi-asset ROM blobs.** Each `--rom` output holds ONE asset (one
+  image OR one tilemap). For carts with many assets, write multiple
+  blobs and concatenate them into a single `cron_rom`-loadable file
+  (or wait for a future `--bundle` mode that adds a chunk index).
+- **Quantization is per-image.** When you `2dpak` two RGB PNGs that
+  should share a palette, the median-cut runs independently for each
+  and you'll get different palette entries. Pre-quantize to a shared
+  indexed PNG (GIMP "Image → Mode → Indexed → use existing palette"
+  or `magick +remap`) and pipe both through the indexed path.
