@@ -50,6 +50,7 @@ if(CRONOPIO_BUILD_TOOLS)
         add_subdirectory(tools/headless)
     endif()
     add_subdirectory(tools/cronopio-cc)
+    add_subdirectory(tools/2dpak)
 endif()
 
 if(CRONOPIO_BUILD_EXAMPLES)
