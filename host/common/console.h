@@ -38,6 +38,15 @@ enum { CRON_ENV_OFF = 0, CRON_ENV_ATTACK, CRON_ENV_DECAY, CRON_ENV_SUSTAIN, CRON
  * count/3 triangles. mode is a bitmask. */
 #define CRONOPIO_VERT_WORDS      9            /* x,y,z,u,v,w,c,lu,lv */
 #define CRONOPIO_VERT_BYTES      (CRONOPIO_VERT_WORDS * 4)
+
+/* World-space vertex for cron_xform_polys (the host-side T&L path). 8 little-
+ * endian floats in cart memory: x, y, z (world), u, v (texels), lu, lv
+ * (lightmap UVs in lumels), light (Gouraud light row). The host transforms
+ * each vertex by the bound MVP (cron_mvp), near-clips per triangle, perspective-
+ * divides + maps to the clip-rect viewport, then rasterises through the same
+ * inner loop as cron_polys. Same CRONOPIO_POLY_* mode flags. */
+#define CRONOPIO_WVERT_WORDS     8            /* x,y,z,u,v,lu,lv,light (all f32) */
+#define CRONOPIO_WVERT_BYTES     (CRONOPIO_WVERT_WORDS * 4)
 #define CRONOPIO_POLY_GOURAUD    (1u << 0)   /* interpolate vertex c via cmap */
 #define CRONOPIO_POLY_TEX        (1u << 1)   /* affine texture from image bank */
 #define CRONOPIO_POLY_PERSP      (1u << 2)   /* perspective-correct (needs w)  */
@@ -167,6 +176,13 @@ typedef struct {
      * a per-frame value, period 128); `turb_amp` is the ripple amplitude in
      * texels. Bound by cron_gpu_turb. */
     int turb_phase, turb_amp, turb_set;
+
+    /* Bound MVP matrix for cron_xform_polys — row-major 4x4 (m[r*4+c]), point
+     * transform p' = M * (x,y,z,1). Set via cron_gpu_mvp; mvp_set==0 makes
+     * xform_polys a no-op. Re-bound every entity in Quake (one for the world,
+     * one per brush ent / alias model). */
+    float mvp[16];
+    int   mvp_set;
 
     /* audio */
     cron_voice_t       voices[CRONOPIO_AUDIO_CHANS];
@@ -392,5 +408,19 @@ void cron_gpu_colormap(cronopio_console_t* c, uint32_t offset, int levels, int s
  * index for textured draws, or -1. */
 void cron_gpu_polys (cronopio_console_t* c, uint8_t* heap, int mode,
                      uint32_t verts_off, int count, int arg, int colkey);
+
+/* Bind the model-view-projection matrix used by cron_gpu_xform_polys. mat
+ * is 16 little-endian floats in row-major order (p' = M * (x,y,z,1)).
+ * set=0 unbinds (xform_polys then no-ops). */
+void cron_gpu_mvp(cronopio_console_t* c, const float* mat, int set);
+
+/* Host-side T&L: like cron_gpu_polys but verts are in world space (each
+ * CRONOPIO_WVERT_BYTES). The host transforms each vert by the bound MVP,
+ * near-clips per source triangle, perspective-divides + maps to the bound
+ * clip rect (viewport), then rasterises through the same inner loop as
+ * cron_gpu_polys. count is the number of input verts (count/3 source tris;
+ * each may expand to 0, 1 or 2 screen-space tris after clipping). */
+void cron_gpu_xform_polys(cronopio_console_t* c, uint8_t* heap, int mode,
+                          uint32_t verts_off, int count, int arg, int colkey);
 
 #endif

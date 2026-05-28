@@ -426,6 +426,30 @@ static int sys_polys(struct cvm_image *img, int32_t *r, void *ud) {
     cron_gpu_polys(X->c, HEAP, (int)r[0], voff, count, (int)r[3], (int)r[4]);
     r[0] = 0; return 0;
 }
+static int sys_mvp(struct cvm_image *img, int32_t *r, void *ud) {
+    (void)ud;
+    uint32_t off = (uint32_t)r[0];
+    int      set = (int)r[1];
+    if (!set || off == 0 || (uint64_t)off + 64u > img->mem_size) {
+        cron_gpu_mvp(X->c, 0, 0); r[0] = 0; return 0;
+    }
+    /* matrix is 16 little-endian floats in cart memory — copy into a host
+     * float[16] so the rasteriser doesn't read from cart memory each tri. */
+    float mat[16];
+    memcpy(mat, HEAP + off, sizeof mat);
+    cron_gpu_mvp(X->c, mat, 1);
+    r[0] = 0; return 0;
+}
+static int sys_xform_polys(struct cvm_image *img, int32_t *r, void *ud) {
+    GUARD;
+    uint32_t voff  = (uint32_t)r[1];
+    int      count = (int)r[2];
+    if (count < 3) { r[0] = 0; return 0; }
+    uint64_t need = (uint64_t)count * CRONOPIO_WVERT_BYTES;
+    if ((uint64_t)voff + need > img->mem_size) { r[0] = 0; return 0; }
+    cron_gpu_xform_polys(X->c, HEAP, (int)r[0], voff, count, (int)r[3], (int)r[4]);
+    r[0] = 0; return 0;
+}
 
 #undef X
 #undef GUARD
@@ -742,6 +766,8 @@ static const entry_t kSyscalls[] = {
     { "cvm_sys_cron_colormap",     sys_colormap     },
     { "cvm_sys_cron_zclear",       sys_zclear       },
     { "cvm_sys_cron_polys",        sys_polys        },
+    { "cvm_sys_cron_mvp",          sys_mvp          },
+    { "cvm_sys_cron_xform_polys",  sys_xform_polys  },
 };
 
 int cronopio_syscalls_install(struct cvm_image* img, cronopio_console_t* c) {

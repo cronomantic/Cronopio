@@ -135,6 +135,8 @@ extern void     cvm_sys_cron_tspan       (int32_t y, int32_t x0, int32_t x1, con
 extern void     cvm_sys_cron_zbuf        (int32_t* zbuffer);
 extern void     cvm_sys_cron_zclear      (int32_t far);
 extern void     cvm_sys_cron_polys       (int32_t mode, const void* verts, int32_t count, int32_t arg, int32_t colkey);
+extern void     cvm_sys_cron_mvp         (const float* mat16);
+extern void     cvm_sys_cron_xform_polys (int32_t mode, const void* wverts, int32_t count, int32_t arg, int32_t colkey);
 extern void     cvm_sys_cron_lightmap    (const uint8_t* ptr, int32_t w, int32_t h);
 extern void     cvm_sys_cron_colormap    (const uint8_t* ptr, int32_t levels);
 extern void     cvm_sys_cron_turb        (int32_t phase, int32_t amp);
@@ -307,6 +309,32 @@ static inline void     cron_zclear       (int32_t far) { cvm_sys_cron_zclear(far
 /* Draw count/3 triangles. arg = flat colour, or image bank when TEX; colkey
  * = transparent texel or -1. */
 static inline void     cron_polys        (int32_t mode, const cron_vert_t* verts, int32_t count, int32_t arg, int32_t colkey) { cvm_sys_cron_polys(mode, verts, count, arg, colkey); }
+
+/* World-space vertex for cron_xform_polys (host-side T&L). The host
+ * transforms (xyz) by the bound MVP, near-clips per triangle, perspective-
+ * divides and maps to the bound clip rect (viewport), then rasterises the
+ * same way as cron_polys. u,v are texel coords (pixels), lu,lv are lumel
+ * coords for CRON_POLY_LIGHTMAP, light is the Gouraud light row — same
+ * meaning as cron_vert_t's fields, but unscaled (host quantises). */
+typedef struct {
+    float x, y, z;     /* world space */
+    float u, v;        /* texels (pixels)        — CRON_POLY_TEX */
+    float lu, lv;      /* lumels                 — CRON_POLY_LIGHTMAP */
+    float light;       /* Gouraud light row      — CRON_POLY_GOURAUD */
+} cron_wvert_t;
+
+/* Bind the model-view-projection matrix for cron_xform_polys. mat16 is
+ * 16 floats in row-major order (p' = M * (x,y,z,1)). Pass NULL to unbind
+ * (cron_xform_polys then no-ops). The host caches the matrix; subsequent
+ * cron_xform_polys calls reuse it until rebind. */
+static inline void     cron_mvp          (const float* mat16)                       { cvm_sys_cron_mvp(mat16); }
+
+/* Host-side T&L draw: like cron_polys but verts are world-space (cron_wvert_t).
+ * The host transforms via the bound cron_mvp, near-clips per source triangle,
+ * perspective-divides + viewport-maps, then rasterises through the same inner
+ * loop as cron_polys. count is the number of input verts (count/3 source
+ * triangles; each may expand to 0, 1 or 2 screen triangles after clipping). */
+static inline void     cron_xform_polys  (int32_t mode, const cron_wvert_t* verts, int32_t count, int32_t arg, int32_t colkey) { cvm_sys_cron_xform_polys(mode, verts, count, arg, colkey); }
 /* CRON_POLY_LIGHTMAP bindings (Quake-style per-texel light). lightmap: a small
  * per-surface 8bpp grid, each byte a colormap row, sampled by the triangle's
  * lu/lv (NULL/0 dims disables). colormap: a levels*256 table indexed

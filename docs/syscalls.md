@@ -235,11 +235,32 @@ typedef struct {
 | Name                  | Signature (SDK)                                                  | Notes                                                                |
 |-----------------------|-----------------------------------------------------------------|----------------------------------------------------------------------|
 | `cron_polys`          | `void(mode, const cron_vert_t* verts, count, arg, colkey)`     | Draw `count/3` triangles. **mode** is a bitmask: `FLAT` (solid `arg`), `GOURAUD` (interpolate `.c` through the cmap), `TEX` (affine texture from image bank `arg`, `colkey` transparent), `PERSP` (perspective-correct, uses `.w`), `ZTEST` (depth test/write), `LIGHTMAP` (per-texel light, below), `CLAMP` (clamp texcoords to the edge instead of wrapping — single-sheet skins), `TURB` (per-pixel turbulence, below). |
+| `cron_mvp`            | `void(const float* mat16)`                                      | Bind the 4×4 row-major MVP matrix used by `cron_xform_polys`. `NULL` unbinds (xform_polys then no-ops). |
+| `cron_xform_polys`    | `void(mode, const cron_wvert_t* verts, count, arg, colkey)`    | Host-side T&L draw: verts are world-space (see `cron_wvert_t` below). The host transforms each vert by the bound `cron_mvp`, near-clips per source triangle, perspective-divides + maps to the bound clip rect (viewport), then rasterises through the same inner loop as `cron_polys`. Same `CRONOPIO_POLY_*` mode flags / image / lightmap / colormap / turb bindings. |
 | `cron_zbuf`           | `void(int32_t* zbuffer)`                                        | Bind a 320×240 i32 depth buffer in cart memory; NULL disables (painter's-only). |
 | `cron_zclear`         | `void(int32_t far)`                                             | Fill the bound z-buffer with `far` (e.g. `0x7FFFFFFF`).              |
 | `cron_lightmap`       | `void(const u8* ptr, i32 w, i32 h)`                            | Bind a per-surface light grid (8bpp, each byte a colormap *row*) for `LIGHTMAP` draws; NULL/0 disables |
 | `cron_colormap`       | `void(const u8* ptr, i32 levels)`                              | Bind a `levels*256` colormap indexed `[light*256 + texel]` (e.g. Quake's 64×256); NULL/0 disables |
 | `cron_turb`           | `void(i32 phase, i32 amp)`                                     | Bind per-pixel texcoord turbulence for `TURB` draws (water/lava ripple); `phase` advances the sine (period 128), `amp` is the texel amplitude; `amp<=0` disables |
+
+`cron_xform_polys`'s vertex format (`cron_wvert_t`, 8 little-endian floats):
+
+```c
+typedef struct {
+    float x, y, z;     /* world space */
+    float u, v;        /* texels (pixels)    — TEX */
+    float lu, lv;      /* lumels             — LIGHTMAP */
+    float light;       /* Gouraud light row  — GOURAUD */
+} cron_wvert_t;
+```
+
+Use it instead of `cron_polys` when you have world-space geometry + an MVP
+matrix: the cart skips the per-vertex matrix multiply, near-clip and viewport
+map (those run native-C in the host instead of the VM). Bind the matrix once
+with `cron_mvp`, rebind only when the entity transform changes (the world,
+each brush ent, each alias model). The result is bit-identical to doing the
+maths in the cart with `cron_mat_point` + `cron_clip_near` + `cron_to_screen`
++ `cron_polys`, just much cheaper on the cart side.
 
 Like the rasteriser accelerators, triangles honour the clip rect (viewport)
 but ignore camera and the draw palette; the active `cmap` shades Gouraud and
