@@ -87,6 +87,30 @@ preemptive `libs/threads/` abstraction into Cronopio's single
 directly to implement Lua-style generators, async/await desugarings,
 or any other cooperative-concurrency scheme.
 
+### The per-scanline table pattern
+
+The 2D capability set (`cron_bltm_raster`, `cron_bltm_affine`) and the 3D
+accelerated renderer (`cron_polys`, `cron_xform_polys`) share an
+architectural shape: the cart owns a buffer of per-element parameters
+in its heap, the host reads that buffer in a tight inner loop, and the
+whole thing is a single syscall per primitive. No per-scanline VM
+round-trips, no host-side state to keep in sync between calls.
+
+For 2D, this lets a tilemap blit carry SNES PPU-style HDMA effects
+(linescroll, palette gradients) and Mode-7 perspective floors in one
+host call — the cart fills a 240-entry table once per frame (typically
+via a sin/cos lookup or a perspective formula) and forgets. The format
+is small and aligned for direct indexing (`cron_raster_t` is 8 bytes,
+`cron_affine_t` is 16 bytes; the entry index is the destination y).
+
+For 3D, `cron_polys` reads N vertices from the same kind of buffer; the
+cart submits one batch, the host walks it. The pattern generalises: any
+"the cart submits a list, the host rasters" primitive looks the same.
+This is the cleanest way to add expressive features without bloating
+the syscall count or imposing host-side state. It also means cart code
+that mixes 2D and 3D needs no special integration — both flow through
+the cart's `frame()` callback in whatever order the cart picks.
+
 **`tools/headless/`** — windowless cart runners that link only
 `host/common/` (no SDL). `cronopio-headless` drives N frames and prints
 a framebuffer histogram (and an optional PPM), for CI / "does this cart

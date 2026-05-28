@@ -265,6 +265,35 @@ static int sys_bltm(struct cvm_image *img, int32_t *r, void *ud) {
     cron_gpu_bltm(X->c, HEAP, (int)r[0], (int)r[1], (int)r[2], (int)r[3], (int)r[4], (int)r[5], (int)r[6], (int)r[7]);
     r[0] = 0; return 0;
 }
+/* sys_bltm_raster — 7 args (fits in R0..R6). sx/sy and w/h are packed as
+ * i16 lo/hi pairs to keep the count under 8, mirroring cron_blt_ex's
+ * srcpack/dimpack convention. The SDK inline wrapper does the packing. */
+static int sys_bltm_raster(struct cvm_image *img, int32_t *r, void *ud) {
+    (void)img; GUARD;
+    int16_t  sx_i = (int16_t)(r[3] & 0xFFFF), sy_i = (int16_t)(r[3] >> 16);
+    int16_t  w_i  = (int16_t)(r[4] & 0xFFFF), h_i  = (int16_t)(r[4] >> 16);
+    cron_gpu_bltm_raster(X->c, HEAP, (int)r[0], (int)r[1], (int)r[2],
+                         sx_i, sy_i, w_i, h_i, (int)r[5], (uint32_t)r[6]);
+    r[0] = 0; return 0;
+}
+/* sys_blt_flip — 7 args (R0..R6). sx/sy and w/h packed (mirror cron_blt_ex). */
+static int sys_blt_flip(struct cvm_image *img, int32_t *r, void *ud) {
+    (void)img; GUARD;
+    int16_t sx_i = (int16_t)(r[3] & 0xFFFF), sy_i = (int16_t)(r[3] >> 16);
+    int16_t w_i  = (int16_t)(r[4] & 0xFFFF), h_i  = (int16_t)(r[4] >> 16);
+    cron_gpu_blt_flip(X->c, HEAP, (int)r[0], (int)r[1], (int)r[2],
+                      sx_i, sy_i, w_i, h_i, (int)r[5], (int)r[6]);
+    r[0] = 0; return 0;
+}
+
+/* sys_bltm_affine — 6 args (R0..R5). w/h packed as a single i16 pair. */
+static int sys_bltm_affine(struct cvm_image *img, int32_t *r, void *ud) {
+    (void)img; GUARD;
+    int16_t w_i = (int16_t)(r[3] & 0xFFFF), h_i = (int16_t)(r[3] >> 16);
+    cron_gpu_bltm_affine(X->c, HEAP, (int)r[0], (int)r[1], (int)r[2],
+                         w_i, h_i, (int)r[4], (uint32_t)r[5]);
+    r[0] = 0; return 0;
+}
 static int sys_rectb(struct cvm_image *img, int32_t *r, void *ud) {
     (void)img; GUARD;
     cron_gpu_rectb(X->c, HEAP, (int)r[0], (int)r[1], (int)r[2], (int)r[3], (int)r[4]);
@@ -784,6 +813,9 @@ static const entry_t kSyscalls[] = {
     { "cvm_sys_cron_tilemap",      sys_tilemap      },
     { "cvm_sys_cron_blt",          sys_blt          },
     { "cvm_sys_cron_bltm",         sys_bltm         },
+    { "cvm_sys_cron_bltm_raster",  sys_bltm_raster  },
+    { "cvm_sys_cron_bltm_affine",  sys_bltm_affine  },
+    { "cvm_sys_cron_blt_flip",     sys_blt_flip     },
     /* extended graphics: shapes */
     { "cvm_sys_cron_rectb",        sys_rectb        },
     { "cvm_sys_cron_circ",         sys_circ         },

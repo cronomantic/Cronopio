@@ -276,6 +276,36 @@ void cron_gpu_blit_raw(cronopio_console_t* c, uint8_t* heap,
             put_px(c, fb, dx + i, dy + j, src[j * sw + i]);
 }
 
+/* Image bank blit with horizontal/vertical flip flags. Cheap fast path for
+ * sprites that need to face left or stand on their head — no rotation, no
+ * scale, just NN sampling with optional axis mirroring. Matches cron_blt
+ * argument-wise except for the extra `flags` (CRON_BLT_HFLIP / VFLIP). */
+void cron_gpu_blt_flip(cronopio_console_t* c, uint8_t* heap, int img,
+                       int dx, int dy, int sx, int sy, int w, int h,
+                       int colkey, int flags) {
+    if ((unsigned)img >= CRONOPIO_IMAGE_SLOTS || !c->images[img].used) return;
+    if (w <= 0 || h <= 0) return;
+    cron_image_bank_t* b = &c->images[img];
+    const uint8_t* src = heap + b->offset;
+    uint8_t* fb = fb_of(c, heap);
+    int hflip = (flags & 1);
+    int vflip = (flags & 2);
+    for (int j = 0; j < h; ++j) {
+        int sj = vflip ? (h - 1 - j) : j;
+        int srcy = sy + sj;
+        if (srcy < 0 || srcy >= b->h) continue;
+        const uint8_t* row = src + srcy * b->w;
+        for (int i = 0; i < w; ++i) {
+            int si = hflip ? (w - 1 - i) : i;
+            int srcx = sx + si;
+            if (srcx < 0 || srcx >= b->w) continue;
+            uint8_t s = row[srcx];
+            if (colkey >= 0 && s == (uint8_t)colkey) continue;
+            put_px(c, fb, dx + i, dy + j, s);
+        }
+    }
+}
+
 /* ---- image / tilemap banks -------------------------------------------- */
 
 int cron_gpu_image(cronopio_console_t* c, int slot, uint32_t offset, int w, int h, uint32_t mem_size) {
@@ -367,6 +397,21 @@ void cron_gpu_blt_ex(cronopio_console_t* c, uint8_t* heap, int img,
     }
 }
 
+/* Tile cell layout (uint16_t):
+ *   0xFFFF         = empty cell (no draw)
+ *   bit 15         = HFLIP
+ *   bit 14         = VFLIP
+ *   bits 13..0     = tile index in the image bank (0..16383)
+ *
+ * Backwards compatible with the original "all 16 bits are the index": old
+ * tilemaps with values < 0x4000 land with HFLIP=0, VFLIP=0, tile index
+ * unchanged. Old "empty" sentinel 0xFFFF still has all bits set so it
+ * stays empty (the empty check is done before the flag/index split). */
+#define CELL_EMPTY   0xFFFFu
+#define CELL_HFLIP   0x8000u
+#define CELL_VFLIP   0x4000u
+#define CELL_IDX_MASK 0x3FFFu
+
 void cron_gpu_bltm(cronopio_console_t* c, uint8_t* heap, int tm,
                    int dx, int dy, int sx, int sy, int w, int h, int colkey) {
     if ((unsigned)tm >= CRONOPIO_TILEMAP_SLOTS || !c->tilemaps[tm].used) return;
@@ -386,19 +431,138 @@ void cron_gpu_bltm(cronopio_console_t* c, uint8_t* heap, int tm,
     for (int j = 0; j < h; ++j) {
         int py = (sy + j) % map_h_px;
         if (py < 0) py += map_h_px;
-        int cy = py / CRONOPIO_TILE_SIZE, ty = py % CRONOPIO_TILE_SIZE;
+        int cy = py / CRONOPIO_TILE_SIZE, ty0 = py % CRONOPIO_TILE_SIZE;
         for (int i = 0; i < w; ++i) {
             int px = (sx + i) % map_w_px;
             if (px < 0) px += map_w_px;
-            int cx = px / CRONOPIO_TILE_SIZE, tx = px % CRONOPIO_TILE_SIZE;
+            int cx = px / CRONOPIO_TILE_SIZE, tx0 = px % CRONOPIO_TILE_SIZE;
             uint16_t cell = cells[cy * m->w + cx];
-            if (cell == 0xFFFF) continue;            /* empty cell */
-            int til_x = (cell % tpr) * CRONOPIO_TILE_SIZE + tx;
-            int til_y = (cell / tpr) * CRONOPIO_TILE_SIZE + ty;
+            if (cell == CELL_EMPTY) continue;
+            int tx = (cell & CELL_HFLIP) ? (CRONOPIO_TILE_SIZE - 1 - tx0) : tx0;
+            int ty = (cell & CELL_VFLIP) ? (CRONOPIO_TILE_SIZE - 1 - ty0) : ty0;
+            int idx = cell & CELL_IDX_MASK;
+            int til_x = (idx % tpr) * CRONOPIO_TILE_SIZE + tx;
+            int til_y = (idx / tpr) * CRONOPIO_TILE_SIZE + ty;
             if (til_x >= ib->w || til_y >= ib->h) continue;
             uint8_t s = tiles[til_y * ib->w + til_x];
             if (colkey >= 0 && s == (uint8_t)colkey) continue;
             put_px(c, fb, dx + i, dy + j, s);
+        }
+    }
+}
+
+/* Per-line raster table entry — matches sdk/include/cronopio.h cron_raster_t.
+ * 8 bytes, aligned for direct indexing. */
+typedef struct {
+    int16_t  scroll_x;
+    int16_t  scroll_y;
+    uint8_t  pal_offset;
+    uint8_t  flags;       /* reserved */
+    uint16_t _reserved;
+} raster_entry_t;
+
+/* Tilemap blit with per-scanline parameter overrides. Each scanline j of the
+ * destination reads table[j] for its own scroll_x/scroll_y/pal_offset; the
+ * sx/sy args become the baseline that overrides ADD to. Single syscall —
+ * the host walks the table in this loop, no per-line VM round-trip. */
+void cron_gpu_bltm_raster(cronopio_console_t* c, uint8_t* heap, int tm,
+                          int dx, int dy, int sx, int sy, int w, int h,
+                          int colkey, uint32_t table_off) {
+    if ((unsigned)tm >= CRONOPIO_TILEMAP_SLOTS || !c->tilemaps[tm].used) return;
+    cron_tilemap_bank_t* m = &c->tilemaps[tm];
+    if ((unsigned)m->img >= CRONOPIO_IMAGE_SLOTS || !c->images[m->img].used) return;
+    cron_image_bank_t* ib = &c->images[m->img];
+    int tpr = ib->w / CRONOPIO_TILE_SIZE;
+    if (tpr <= 0) return;
+    if (w <= 0 || h <= 0) return;
+    const uint16_t* cells = (const uint16_t*)(heap + m->offset);
+    const uint8_t*  tiles = heap + ib->offset;
+    const raster_entry_t* table = (const raster_entry_t*)(heap + table_off);
+    uint8_t* fb = fb_of(c, heap);
+    int map_w_px = m->w * CRONOPIO_TILE_SIZE, map_h_px = m->h * CRONOPIO_TILE_SIZE;
+    if (map_w_px <= 0 || map_h_px <= 0) return;
+    for (int j = 0; j < h; ++j) {
+        /* Per-scanline parameter pull. Indexed by the DESTINATION y (dy+j)
+         * so the cart can fill a 240-entry table covering the whole screen
+         * once and reuse it regardless of where the layer happens to land. */
+        int dyl = dy + j;
+        const raster_entry_t r = (dyl >= 0 && dyl < CRONOPIO_SCREEN_H)
+                               ? table[dyl]
+                               : (raster_entry_t){0,0,0,0,0};
+        int py = (sy + j + r.scroll_y) % map_h_px;
+        if (py < 0) py += map_h_px;
+        int cy = py / CRONOPIO_TILE_SIZE, ty0 = py % CRONOPIO_TILE_SIZE;
+        int sx_line = sx + r.scroll_x;
+        uint8_t pal_off = r.pal_offset;
+        for (int i = 0; i < w; ++i) {
+            int px = (sx_line + i) % map_w_px;
+            if (px < 0) px += map_w_px;
+            int cx = px / CRONOPIO_TILE_SIZE, tx0 = px % CRONOPIO_TILE_SIZE;
+            uint16_t cell = cells[cy * m->w + cx];
+            if (cell == CELL_EMPTY) continue;
+            int tx = (cell & CELL_HFLIP) ? (CRONOPIO_TILE_SIZE - 1 - tx0) : tx0;
+            int ty = (cell & CELL_VFLIP) ? (CRONOPIO_TILE_SIZE - 1 - ty0) : ty0;
+            int idx = cell & CELL_IDX_MASK;
+            int til_x = (idx % tpr) * CRONOPIO_TILE_SIZE + tx;
+            int til_y = (idx / tpr) * CRONOPIO_TILE_SIZE + ty;
+            if (til_x >= ib->w || til_y >= ib->h) continue;
+            uint8_t s = tiles[til_y * ib->w + til_x];
+            if (colkey >= 0 && s == (uint8_t)colkey) continue;
+            put_px(c, fb, dx + i, dy + j, (uint8_t)(s + pal_off));
+        }
+    }
+}
+
+/* Per-line affine table entry — matches sdk/include/cronopio.h cron_affine_t.
+ * 16 bytes: u/v at screen x=0, plus per-pixel du/dv increments. All Q16.16. */
+typedef struct {
+    int32_t u, v;     /* texture coord at screen x=0 (Q16.16) */
+    int32_t du, dv;   /* increment per screen pixel (Q16.16) */
+} affine_entry_t;
+
+/* Affine ("Mode-7"-style) tilemap blit. For each destination scanline j:
+ *   texel sampled at screen-x i = (u + i*du, v + i*dv)
+ * where (u, v, du, dv) come from table[dy+j]. The texture coords wrap
+ * modulo the tilemap size (so the "floor" extends to infinity). One
+ * syscall covers the whole plane; the cart fills the table outside. */
+void cron_gpu_bltm_affine(cronopio_console_t* c, uint8_t* heap, int tm,
+                          int dx, int dy, int w, int h, int colkey,
+                          uint32_t table_off) {
+    if ((unsigned)tm >= CRONOPIO_TILEMAP_SLOTS || !c->tilemaps[tm].used) return;
+    cron_tilemap_bank_t* m = &c->tilemaps[tm];
+    if ((unsigned)m->img >= CRONOPIO_IMAGE_SLOTS || !c->images[m->img].used) return;
+    cron_image_bank_t* ib = &c->images[m->img];
+    int tpr = ib->w / CRONOPIO_TILE_SIZE;
+    if (tpr <= 0) return;
+    if (w <= 0 || h <= 0) return;
+    const uint16_t* cells = (const uint16_t*)(heap + m->offset);
+    const uint8_t*  tiles = heap + ib->offset;
+    const affine_entry_t* table = (const affine_entry_t*)(heap + table_off);
+    uint8_t* fb = fb_of(c, heap);
+    int map_w_px = m->w * CRONOPIO_TILE_SIZE, map_h_px = m->h * CRONOPIO_TILE_SIZE;
+    if (map_w_px <= 0 || map_h_px <= 0) return;
+    for (int j = 0; j < h; ++j) {
+        int dyl = dy + j;
+        if (dyl < 0 || dyl >= CRONOPIO_SCREEN_H) continue;
+        const affine_entry_t a = table[dyl];
+        int32_t u = a.u, v = a.v;
+        for (int i = 0; i < w; ++i, u += a.du, v += a.dv) {
+            /* Q16.16 -> pixel coord; modulo wrap for "infinite floor". */
+            int px = ((u >> 16) % map_w_px + map_w_px) % map_w_px;
+            int py = ((v >> 16) % map_h_px + map_h_px) % map_h_px;
+            int cx = px / CRONOPIO_TILE_SIZE, tx0 = px % CRONOPIO_TILE_SIZE;
+            int cy = py / CRONOPIO_TILE_SIZE, ty0 = py % CRONOPIO_TILE_SIZE;
+            uint16_t cell = cells[cy * m->w + cx];
+            if (cell == CELL_EMPTY) continue;
+            int tx = (cell & CELL_HFLIP) ? (CRONOPIO_TILE_SIZE - 1 - tx0) : tx0;
+            int ty = (cell & CELL_VFLIP) ? (CRONOPIO_TILE_SIZE - 1 - ty0) : ty0;
+            int idx = cell & CELL_IDX_MASK;
+            int til_x = (idx % tpr) * CRONOPIO_TILE_SIZE + tx;
+            int til_y = (idx / tpr) * CRONOPIO_TILE_SIZE + ty;
+            if (til_x >= ib->w || til_y >= ib->h) continue;
+            uint8_t s = tiles[til_y * ib->w + til_x];
+            if (colkey >= 0 && s == (uint8_t)colkey) continue;
+            put_px(c, fb, dx + i, dyl, s);
         }
     }
 }

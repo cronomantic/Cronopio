@@ -363,9 +363,35 @@ int  cron_gpu_tilemap(cronopio_console_t* c, int slot, uint32_t offset, int w, i
  * horizontally/vertically (Pyxel convention). */
 void cron_gpu_blt (cronopio_console_t* c, uint8_t* heap, int img,
                    int dx, int dy, int sx, int sy, int w, int h, int colkey);
-/* Blit a pixel region (sx,sy,w,h) of tilemap `tm` to (dx,dy). colkey as blt. */
+/* Blit a pixel region (sx,sy,w,h) of tilemap `tm` to (dx,dy). colkey as blt.
+ * Tile cells use the layout:
+ *   0xFFFF        = empty cell
+ *   bit 15        = HFLIP
+ *   bit 14        = VFLIP
+ *   bits 13..0    = tile index in the image bank (0..16383)
+ * Backwards-compatible with old tilemaps whose cells were all-index (values
+ * < 0x4000 land with HFLIP=0, VFLIP=0, index unchanged). */
 void cron_gpu_bltm(cronopio_console_t* c, uint8_t* heap, int tm,
                    int dx, int dy, int sx, int sy, int w, int h, int colkey);
+
+/* Tilemap blit with per-scanline parameter overrides — HDMA-style raster
+ * effects. The table at heap+table_off is an array of cron_raster_t (see
+ * sdk/include/cronopio.h), indexed by destination y. Each entry carries
+ * scroll_x/scroll_y deltas (added to the call's sx/sy) and a palette
+ * offset (added to the sampled colour index before write). One host syscall
+ * walks the whole table, zero per-line VM round-trips. */
+void cron_gpu_bltm_raster(cronopio_console_t* c, uint8_t* heap, int tm,
+                          int dx, int dy, int sx, int sy, int w, int h,
+                          int colkey, uint32_t table_off);
+
+/* Affine ("Mode-7") tilemap blit. The table at heap+table_off is an array
+ * of cron_affine_t, indexed by destination y. Each entry carries
+ * {u, v, du, dv} in Q16.16 — the texture coord at screen-x=0 and its
+ * increment per pixel along x. Texture coords wrap modulo the tilemap
+ * size (infinite floor / sky). */
+void cron_gpu_bltm_affine(cronopio_console_t* c, uint8_t* heap, int tm,
+                          int dx, int dy, int w, int h, int colkey,
+                          uint32_t table_off);
 
 /* Rotozoom blit: like blt, but the sprite is scaled (scale_q16, Q16.16,
  * 0x10000 = 1.0) and rotated (rotate_deg, clockwise) around its centre,
@@ -373,6 +399,13 @@ void cron_gpu_bltm(cronopio_console_t* c, uint8_t* heap, int tm,
 void cron_gpu_blt_ex(cronopio_console_t* c, uint8_t* heap, int img,
                      int dx, int dy, int sx, int sy, int w, int h,
                      int colkey, int rotate_deg, int scale_q16);
+
+/* Flip-aware blit (no rotate, no scale). flags = bit 0 (HFLIP) | bit 1
+ * (VFLIP). The fast path for character sprites that face left/right or
+ * flip upside-down. cron_gpu_blt_ex covers the rotation+scale case. */
+void cron_gpu_blt_flip(cronopio_console_t* c, uint8_t* heap, int img,
+                       int dx, int dy, int sx, int sy, int w, int h,
+                       int colkey, int flags);
 
 /* --- Textured-rasteriser accelerators (the perf escape hatch for
  * software 3D — DOOM's R_DrawColumn / R_DrawSpan in native C). They honour

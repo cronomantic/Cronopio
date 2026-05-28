@@ -113,7 +113,23 @@ extern int32_t  cvm_sys_cron_save_reserve(int32_t bytes);
 extern void     cvm_sys_cron_image       (int32_t slot, const uint8_t* ptr, int32_t w, int32_t h);
 extern void     cvm_sys_cron_tilemap     (int32_t slot, const uint16_t* ptr, int32_t w, int32_t h, int32_t img);
 extern void     cvm_sys_cron_blt         (int32_t img, int32_t dx, int32_t dy, int32_t sx, int32_t sy, int32_t w, int32_t h, int32_t colkey);
+/* Forward decls at file scope — referencing these struct tags inside a
+ * prototype's argument list (without this) would otherwise scope them to
+ * the prototype, making the later typedef incompatible. */
+struct cron_raster;
+struct cron_affine;
+
 extern void     cvm_sys_cron_bltm        (int32_t tm, int32_t dx, int32_t dy, int32_t sx, int32_t sy, int32_t w, int32_t h, int32_t colkey);
+/* bltm_raster: per-scanline parameter table (cron_raster_t[]) baked into a
+ * single syscall. sx/sy and w/h are packed as i16 lo/hi pairs (same as
+ * cron_blt_ex's srcpack/dimpack) to keep the count at 7 args. The wrapper
+ * below does the packing. */
+extern void     cvm_sys_cron_bltm_raster (int32_t tm, int32_t dx, int32_t dy, int32_t srcpack, int32_t dimpack, int32_t colkey, const struct cron_raster* table);
+/* bltm_affine: per-scanline 2D affine ({u,v,du,dv} in Q16.16) for Mode-7
+ * planes. w/h packed. */
+extern void     cvm_sys_cron_bltm_affine (int32_t tm, int32_t dx, int32_t dy, int32_t dimpack, int32_t colkey, const struct cron_affine* table);
+/* blt_flip: sprite blit with HFLIP/VFLIP flags. 7 args (sx/sy and w/h packed). */
+extern void     cvm_sys_cron_blt_flip    (int32_t img, int32_t dx, int32_t dy, int32_t srcpack, int32_t dimpack, int32_t colkey, int32_t flags);
 extern void     cvm_sys_cron_rectb       (int32_t x, int32_t y, int32_t w, int32_t h, int32_t color);
 extern void     cvm_sys_cron_circ        (int32_t x, int32_t y, int32_t r, int32_t color);
 extern void     cvm_sys_cron_circb       (int32_t x, int32_t y, int32_t r, int32_t color);
@@ -257,6 +273,52 @@ static inline void     cron_tilemap     (int32_t slot, const uint16_t* ptr, int3
  * negative w/h flip. */
 static inline void     cron_blt         (int32_t img, int32_t dx, int32_t dy, int32_t sx, int32_t sy, int32_t w, int32_t h, int32_t colkey) { cvm_sys_cron_blt(img, dx, dy, sx, sy, w, h, colkey); }
 static inline void     cron_bltm        (int32_t tm, int32_t dx, int32_t dy, int32_t sx, int32_t sy, int32_t w, int32_t h, int32_t colkey) { cvm_sys_cron_bltm(tm, dx, dy, sx, sy, w, h, colkey); }
+
+/* Tile-cell layout for cron_bltm and its raster/affine variants. */
+#define CRON_TILE_EMPTY    0xFFFFu
+#define CRON_TILE_HFLIP    0x8000u
+#define CRON_TILE_VFLIP    0x4000u
+#define CRON_TILE_IDX_MASK 0x3FFFu
+
+typedef struct cron_raster {
+    int16_t  scroll_x;
+    int16_t  scroll_y;
+    uint8_t  pal_offset;
+    uint8_t  flags;
+    uint16_t _pad;
+} cron_raster_t;
+
+typedef struct cron_affine {
+    int32_t u, v;
+    int32_t du, dv;
+} cron_affine_t;
+
+static inline void cron_bltm_raster(int32_t tm, int32_t dx, int32_t dy,
+                                    int32_t sx, int32_t sy, int32_t w, int32_t h,
+                                    int32_t colkey, const cron_raster_t* table) {
+    int32_t src = (sx & 0xFFFF) | (sy << 16);
+    int32_t dim = (w  & 0xFFFF) | (h  << 16);
+    cvm_sys_cron_bltm_raster(tm, dx, dy, src, dim, colkey, (const struct cron_raster*)table);
+}
+
+static inline void cron_bltm_affine(int32_t tm, int32_t dx, int32_t dy,
+                                    int32_t w, int32_t h,
+                                    int32_t colkey, const cron_affine_t* table) {
+    int32_t dim = (w & 0xFFFF) | (h << 16);
+    cvm_sys_cron_bltm_affine(tm, dx, dy, dim, colkey, (const struct cron_affine*)table);
+}
+
+/* Sprite-blit flip flags. */
+#define CRON_BLT_HFLIP  1
+#define CRON_BLT_VFLIP  2
+
+static inline void cron_blt_flip(int32_t img, int32_t dx, int32_t dy,
+                                 int32_t sx, int32_t sy, int32_t w, int32_t h,
+                                 int32_t colkey, int32_t flags) {
+    int32_t src = (sx & 0xFFFF) | (sy << 16);
+    int32_t dim = (w  & 0xFFFF) | (h  << 16);
+    cvm_sys_cron_blt_flip(img, dx, dy, src, dim, colkey, flags);
+}
 static inline void     cron_rectb       (int32_t x, int32_t y, int32_t w, int32_t h, int32_t c) { cvm_sys_cron_rectb(x, y, w, h, c); }
 static inline void     cron_circ        (int32_t x, int32_t y, int32_t r, int32_t c) { cvm_sys_cron_circ(x, y, r, c); }
 static inline void     cron_circb       (int32_t x, int32_t y, int32_t r, int32_t c) { cvm_sys_cron_circb(x, y, r, c); }
