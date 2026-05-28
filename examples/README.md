@@ -10,6 +10,7 @@ procedurally at boot, so there are no external files to ship.
 | [sprites](sprites/) | The Pyxel-style 2D layer: image banks, tilemaps, `blt` with colour-key transparency and flipping, `bltm` scrolling, plus a shapes/text HUD. Move the sprite with the d-pad. |
 | [cube](cube/) | The 3D pipeline end to end. Cart-side maths (`cronopio3d.h`: perspective/lookat/rotation, transform + near-clip + project) feeding the host triangle rasteriser (`cron_polys`, affine texturing, depth buffer). A spinning textured cube. |
 | [lit](lit/) | Diffuse lighting through the 3D pipeline. Per-vertex normals dotted with a fixed light pick an index into a dark→bright palette ramp; `CRON_POLY_GOURAUD` interpolates it across each face. A shaded spinning cube. |
+| [mouse](mouse/) | The mouse API end to end: absolute position, accumulated deltas, wheel, 5-button mask (L/R/M/X1/X2), `cron_cursor(0)` to hide the OS cursor + draw your own, and `cron_mouse_relative` for SDL mouselook mode. A pixel-art paint scratchpad — LEFT to paint, RIGHT to clear, wheel to cycle colour, MIDDLE to toggle relative mode. |
 
 ## Building
 
