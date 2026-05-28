@@ -1679,3 +1679,26 @@ char *ctime(const time_t *timep) {
     (void)timep;
     return asctime(&_cvm_tm);
 }
+
+/* ====================================================================== */
+/* Coroutines — trampoline for the default cron_coro_init.                 */
+/* The actual context-swap primitive lives in the VM (opcode CVM_OP_CORO_  */
+/* SWAP = 0x3C); the translator lowers a call to __cvm_coro_swap_raw to    */
+/* that opcode, so no body is needed for it here.                         */
+
+#include <coro.h>
+
+void __cron_coro_trampoline(cron_coro_t *self) {
+    /* CORO_SWAP already marked us RUNNING on the first swap-in; redundant
+     * but explicit. Then run the user's fn, mark dead, hand control back. */
+    self->status = CORO_RUNNING;
+    self->fn(self->arg);
+    self->status = CORO_DEAD;
+    if (self->resumer) {
+        cron_coro_swap(self, self->resumer);
+    }
+    /* If there is no resumer, fall off the stack — RET pops the trap
+     * sentinel that cron_coro_init planted at SP top, which faults with
+     * CVM_E_BAD_PC. The intent is a clean trap so a buggy scheduler is
+     * obvious; reaching this point silently would be worse. */
+}
