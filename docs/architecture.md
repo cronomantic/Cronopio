@@ -72,6 +72,21 @@ primitives (`memset`/`memcpy`/`memmove`) are written with
 `MEMSET`/`MEMCPY`/`MEMMOVE` opcodes (one host call each) rather than a
 per-byte VM loop — a large win for memory-heavy carts.
 
+`sdk/include/coro.h` exposes the cart-facing API for cooperative
+coroutines on top of CronoVM's `CVM_OP_CORO_SWAP` opcode:
+`cron_coro_init(coro)` sets up a fresh context on a user-owned stack;
+`cron_coro_swap(from, to)` atomically saves the calling context into
+`from` and resumes `to`; `cron_coro_yield(self)` is a convenience that
+swaps back to whoever last resumed `self`. The default trampoline
+`__cron_coro_trampoline` lives in `sdk/lib/cvm_libc.c` and runs
+`self->fn(self->arg)` on the new stack, transitioning the coroutine's
+status FRESH → RUNNING → DEAD before swapping back to the resumer. This
+is what the cronopio-uqm port uses to retrofit Ur-Quan Masters'
+preemptive `libs/threads/` abstraction into Cronopio's single
+`cron_frame()`-per-frame model; carts can also use the primitive
+directly to implement Lua-style generators, async/await desugarings,
+or any other cooperative-concurrency scheme.
+
 **`tools/headless/`** — windowless cart runners that link only
 `host/common/` (no SDL). `cronopio-headless` drives N frames and prints
 a framebuffer histogram (and an optional PPM), for CI / "does this cart
