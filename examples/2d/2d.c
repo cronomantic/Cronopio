@@ -62,6 +62,10 @@ static const cron_tile_anim_t floor_anim_table[] = {
     },
 };
 
+/* 64 KB blend LUT (256x256) for 50% AVG mode. Built at boot from the
+ * active palette via cron_blend_build. */
+static uint8_t blend_avg_table[256 * 256];
+
 /* ---------------------------------------------------------------------- */
 /* Asset build */
 
@@ -288,6 +292,25 @@ static void frame(void) {
                      CRON_SCALE_1X,                  /* no scale */
                      CRON_BLT_VFLIP);
 
+    /* --- Translucent ghost sprite (AVG blend with background) ----------
+     * Scales 0.8..1.4 over 32 frames and orbits around screen centre.
+     * Exercises put_px's blend path: every pixel of this sprite reads
+     * the FB underneath and writes (src + dst) / 2 via the cron_blend
+     * AVG LUT registered as slot 1. */
+    int g_phase  = (t_frames * 4) & 63;
+    int g_orbit  = isin(g_phase) >> 8;            /* ±128 */
+    int g_orbit2 = isin((g_phase + 16) & 63) >> 8;
+    int g_x = 160 + g_orbit  - SPRSZ / 2;
+    int g_y = 120 + g_orbit2 - SPRSZ / 2;
+    cron_blend_set(1);
+    cron_blt_scale(0,
+                   g_x, g_y,
+                   0, 0, SPRSZ, SPRSZ,
+                   0,                              /* col-key */
+                   0x10000 + (isin(g_phase) >> 1), /* 0.5..1.5 */
+                   0);
+    cron_blend_set(0);                              /* back to opaque */
+
     /* --- HUD --- */
     cron_text("CRONOPIO 2D", 11, 8, 8, 7);
 }
@@ -307,6 +330,13 @@ int main(void) {
     cron_palette_bank(2, dusk_remap);
     cron_tile_anim(0, floor_anim_table,
                    sizeof floor_anim_table / sizeof floor_anim_table[0]);
+
+    /* Snapshot the current 32-entry palette into a u32[32], build the 50%
+     * AVG blend table once, register it as slot 1. */
+    uint32_t pal[32];
+    for (int i = 0; i < 32; ++i) pal[i] = cron_palette_get(i);
+    cron_blend_build(blend_avg_table, pal, CRON_BLEND_AVG);
+    cron_blend_table(1, blend_avg_table);
 
     /* Register banks:
      *   image slot 0 = the sprite (16x16)

@@ -62,7 +62,20 @@ static inline void put_px(cronopio_console_t* c, uint8_t* fb, int xw, int yw, in
     int y = yw - c->draw.cam_y;
     if (x < c->draw.clip_x0 || x >= c->draw.clip_x1) return;
     if (y < c->draw.clip_y0 || y >= c->draw.clip_y1) return;
-    fb[y * CRONOPIO_SCREEN_W + x] = c->draw.pal_map[col & 0xFF];
+    int idx = y * CRONOPIO_SCREEN_W + x;
+    uint8_t s = c->draw.pal_map[col & 0xFF];
+    /* Blend: when slot > 0 and bound, output = table[src][dst]. The table
+     * is 256*256 = 64 KB; cart builds it once per blend mode and registers
+     * it via cron_blend_table. Default slot 0 is opaque (current behaviour);
+     * the branch is well-predicted in non-blending code paths. */
+    int bs = c->blend_active;
+    if (bs > 0 && bs < CRONOPIO_BLEND_SLOTS && c->blend_tables[bs].used) {
+        const uint8_t *heap = fb - c->fb_offset;
+        const uint8_t *tbl  = heap + c->blend_tables[bs].offset;
+        fb[idx] = tbl[(unsigned)s * 256u + fb[idx]];
+    } else {
+        fb[idx] = s;
+    }
 }
 
 /* ---- basic primitives -------------------------------------------------- */
@@ -408,6 +421,24 @@ int cron_gpu_tile_anim(cronopio_console_t* c, int img_slot,
     c->tile_anims[img_slot].table_offset = (count > 0) ? table_offset : 0;
     c->tile_anims[img_slot].count        = (count > 0) ? count : 0;
     return 0;
+}
+
+int cron_gpu_blend_table(cronopio_console_t* c, int slot, uint32_t offset,
+                         uint32_t mem_size) {
+    if (slot <= 0 || slot >= CRONOPIO_BLEND_SLOTS) return -1;
+    /* 256*256 = 65536 bytes required at heap+offset. */
+    if (offset > mem_size || mem_size - offset < 65536u) return -1;
+    c->blend_tables[slot].offset = offset;
+    c->blend_tables[slot].used   = 1;
+    return 0;
+}
+
+void cron_gpu_blend_set(cronopio_console_t* c, int slot) {
+    /* Reject out-of-range silently — staying opaque is safer than aborting.
+     * Slot 0 always disables blending; slot N with .used == 0 also no-ops
+     * (put_px's bound-check catches it). */
+    if (slot < 0 || slot >= CRONOPIO_BLEND_SLOTS) slot = 0;
+    c->blend_active = slot;
 }
 
 /* Lookup helper: given a tilemap cell's masked tile index, return the

@@ -141,6 +141,13 @@ extern void     cvm_sys_cron_palette_bank(int32_t slot, const uint8_t* table);
  * tile indices through a frame cycle driven by the host's frame counter.
  * count=0 (or table=NULL) clears the bank's anim. */
 extern void     cvm_sys_cron_tile_anim   (int32_t img_slot, const void* table, int32_t count);
+/* blend_table: register a 64 KB blend LUT (out = table[src*256 + dst])
+ * as slot 1..7. Slot 0 is the opaque sentinel. */
+extern void     cvm_sys_cron_blend_table (int32_t slot, const uint8_t* table);
+/* blend_set: pick which blend slot put_px consults for subsequent draws.
+ * 0 disables (opaque writes). Stateful — persists across draws until
+ * changed (camera/clip/cmap pattern). */
+extern void     cvm_sys_cron_blend_set   (int32_t slot);
 extern void     cvm_sys_cron_rectb       (int32_t x, int32_t y, int32_t w, int32_t h, int32_t color);
 extern void     cvm_sys_cron_circ        (int32_t x, int32_t y, int32_t r, int32_t color);
 extern void     cvm_sys_cron_circb       (int32_t x, int32_t y, int32_t r, int32_t color);
@@ -379,6 +386,91 @@ static inline void cron_tile_anim(int32_t img_slot,
                                   const cron_tile_anim_t* table,
                                   int32_t count) {
     cvm_sys_cron_tile_anim(img_slot, (const void*)table, count);
+}
+
+/* Blending. Slot 0 = opaque (default). Slots 1..7 hold cart-supplied
+ * 256x256 LUTs (64 KB each). The cart builds these once at boot from
+ * the current palette (see cron_blend_build below for the common modes).
+ * The active slot is stateful — set once, applies to subsequent draws
+ * until changed. */
+#define CRON_BLEND_SLOT_MAX 7
+
+/* Build a 64 KB blend LUT into `out` from the palette `pal` (32 entries,
+ * 0x00RRGGBB) and one of the standard modes. The cart typically gets the
+ * palette via cron_palette_get(i) for i in 0..31 and packs it into a
+ * uint32_t pal[32]. Modes:
+ *   CRON_BLEND_ADD   — saturating add of src + dst (lighten / glow)
+ *   CRON_BLEND_AVG   — 50% blend ((src + dst) / 2)
+ *   CRON_BLEND_SUB   — saturating dst - src (darken / shadow)
+ *   CRON_BLEND_MUL   — modulate (src * dst / 255) per channel
+ * Result is the nearest palette index by squared-RGB distance over the
+ * 32 active entries. ~150k iterations (256 src * 256 dst * 32 pal):
+ * roughly 5-10 ms once at boot. Define CRON_NO_BLEND_BUILD in the cart
+ * to omit the function if you ship pre-baked tables in ROM. */
+enum {
+    CRON_BLEND_ADD = 0,
+    CRON_BLEND_AVG = 1,
+    CRON_BLEND_SUB = 2,
+    CRON_BLEND_MUL = 3
+};
+#ifndef CRON_NO_BLEND_BUILD
+static inline void cron_blend_build(uint8_t* out, const uint32_t pal[32], int mode) {
+    /* Each src/dst pair: compute target RGB per mode, then find nearest
+     * palette index by squared distance. Skips palette entries that are
+     * pure black (treats those as unused so the LUT doesn't bias toward
+     * index 0 when most of the palette is empty). */
+    for (int s = 0; s < 256; ++s) {
+        uint32_t sp = pal[s & 31];
+        int sr = (sp >> 16) & 0xFF, sg = (sp >> 8) & 0xFF, sb = sp & 0xFF;
+        for (int d = 0; d < 256; ++d) {
+            uint32_t dp = pal[d & 31];
+            int dr = (dp >> 16) & 0xFF, dg = (dp >> 8) & 0xFF, db = dp & 0xFF;
+            int tr, tg, tb;
+            switch (mode) {
+                case CRON_BLEND_ADD:
+                    tr = sr + dr; if (tr > 255) tr = 255;
+                    tg = sg + dg; if (tg > 255) tg = 255;
+                    tb = sb + db; if (tb > 255) tb = 255;
+                    break;
+                case CRON_BLEND_AVG:
+                    tr = (sr + dr) >> 1;
+                    tg = (sg + dg) >> 1;
+                    tb = (sb + db) >> 1;
+                    break;
+                case CRON_BLEND_SUB:
+                    tr = dr - sr; if (tr < 0) tr = 0;
+                    tg = dg - sg; if (tg < 0) tg = 0;
+                    tb = db - sb; if (tb < 0) tb = 0;
+                    break;
+                case CRON_BLEND_MUL:
+                default:
+                    tr = (sr * dr) / 255;
+                    tg = (sg * dg) / 255;
+                    tb = (sb * db) / 255;
+                    break;
+            }
+            /* Nearest palette entry over the 32 active slots. */
+            int best = 0;
+            int best_d = 0x7FFFFFFF;
+            for (int p = 0; p < 32; ++p) {
+                uint32_t pp = pal[p];
+                int pr = (pp >> 16) & 0xFF, pg = (pp >> 8) & 0xFF, pb = pp & 0xFF;
+                if (p != 0 && (pr | pg | pb) == 0) continue;  /* skip unused (pure black, slot != 0) */
+                int rd = pr - tr, gd = pg - tg, bd = pb - tb;
+                int dist = rd * rd + gd * gd + bd * bd;
+                if (dist < best_d) { best_d = dist; best = p; }
+            }
+            out[s * 256 + d] = (uint8_t)best;
+        }
+    }
+}
+#endif
+
+static inline void cron_blend_table(int32_t slot, const uint8_t* table) {
+    cvm_sys_cron_blend_table(slot, table);
+}
+static inline void cron_blend_set(int32_t slot) {
+    cvm_sys_cron_blend_set(slot);
 }
 static inline void     cron_rectb       (int32_t x, int32_t y, int32_t w, int32_t h, int32_t c) { cvm_sys_cron_rectb(x, y, w, h, c); }
 static inline void     cron_circ        (int32_t x, int32_t y, int32_t r, int32_t c) { cvm_sys_cron_circ(x, y, r, c); }

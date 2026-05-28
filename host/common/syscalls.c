@@ -309,6 +309,19 @@ static int sys_tile_anim(struct cvm_image *img, int32_t *r, void *ud) {
     cron_gpu_tile_anim(X->c, (int)r[0], (uint32_t)r[1], (int)r[2]);
     r[0] = 0; return 0;
 }
+/* sys_blend_table — registers a 64 KB 256x256 blend LUT as slot 1..7.
+ * 2 args: (slot, offset). */
+static int sys_blend_table(struct cvm_image *img, int32_t *r, void *ud) {
+    (void)img; GUARD;
+    cron_gpu_blend_table(X->c, (int)r[0], (uint32_t)r[1], X->img->mem_size);
+    r[0] = 0; return 0;
+}
+/* sys_blend_set — sets the active blend slot. 0 disables. */
+static int sys_blend_set(struct cvm_image *img, int32_t *r, void *ud) {
+    (void)img; GUARD;
+    cron_gpu_blend_set(X->c, (int)r[0]);
+    r[0] = 0; return 0;
+}
 
 /* sys_bltm_affine — 6 args (R0..R5). w/h packed as a single i16 pair. */
 static int sys_bltm_affine(struct cvm_image *img, int32_t *r, void *ud) {
@@ -843,6 +856,8 @@ static const entry_t kSyscalls[] = {
     { "cvm_sys_cron_blt_scale",    sys_blt_scale    },
     { "cvm_sys_cron_palette_bank", sys_palette_bank },
     { "cvm_sys_cron_tile_anim",    sys_tile_anim    },
+    { "cvm_sys_cron_blend_table",  sys_blend_table  },
+    { "cvm_sys_cron_blend_set",    sys_blend_set    },
     /* extended graphics: shapes */
     { "cvm_sys_cron_rectb",        sys_rectb        },
     { "cvm_sys_cron_circ",         sys_circ         },
