@@ -1197,6 +1197,29 @@ static void cvm_wr32(uint8_t *p, uint32_t v) {
     p[0]=(uint8_t)v; p[1]=(uint8_t)(v>>8); p[2]=(uint8_t)(v>>16); p[3]=(uint8_t)(v>>24);
 }
 
+/* Normalise a path for matching: drop leading "./" and "/", drop a trailing
+ * "/", collapse "."/""/"/" to the empty root prefix. The flat RAM-FS has no
+ * notion of cwd, so a leading slash is meaningless — callers (e.g. UQM's uio,
+ * which uses absolute "/content/..." paths) must compare equal to the
+ * relative names files were created/mounted under. Writes <= RAMFS_NAME-1. */
+static void cvm_norm_path(const char *p, char *out) {
+    if (!p) { out[0] = 0; return; }
+    while (p[0] == '.' && p[1] == '/') p += 2;   /* "./" */
+    while (p[0] == '/') ++p;                       /* leading slashes */
+    size_t n = strlen(p);
+    while (n > 0 && p[n-1] == '/') --n;            /* trailing slash */
+    if (n == 1 && p[0] == '.') n = 0;              /* bare "." -> root */
+    if (n >= RAMFS_NAME) n = RAMFS_NAME - 1;
+    memcpy(out, p, n); out[n] = 0;
+}
+
+/* Path equality up to normalisation ("/content/x" == "content/x" == "./content/x"). */
+static int cvm_path_eq(const char *a, const char *b) {
+    char na[RAMFS_NAME], nb[RAMFS_NAME];
+    cvm_norm_path(a, na); cvm_norm_path(b, nb);
+    return strcmp(na, nb) == 0;
+}
+
 /* Deserialise the FS from the persisted save blob (once, lazily). */
 static void ramfs_load(void) {
     if (g_fs_loaded) return;
@@ -1249,7 +1272,7 @@ static void ramfs_flush(void) {
 
 static int ramfs_find(const char *name) {
     for (int i = 0; i < RAMFS_MAX; ++i)
-        if (g_fs[i].used && strcmp(g_fs[i].name, name) == 0) return i;
+        if (g_fs[i].used && cvm_path_eq(g_fs[i].name, name)) return i;
     return -1;
 }
 static int ramfs_create(const char *name) {
@@ -1279,7 +1302,7 @@ FILE *fopen(const char *path, const char *mode) {
 
     /* ROM-backed file: opened read-only, served from cron_rom(). */
     if (!write && g_rom_path && cron_rom_size() > 0 &&
-        strcmp(path, g_rom_path) == 0) {
+        cvm_path_eq(path, g_rom_path)) {
         for (int i = 0; i < RAMFS_MAX; ++i) if (!g_fh_used[i]) {
             g_fh_used[i] = 1;
             g_fh[i].slot = -1; g_fh[i].pos = 0; g_fh[i].writing = 0;
@@ -1620,19 +1643,7 @@ void perror(const char *s) {
 
 #include <dirent.h>
 
-/* Normalise a path for prefix matching: drop leading "./" and "/", drop a
- * trailing "/", collapse "."/""/"/" to the empty root prefix. Writes at most
- * RAMFS_NAME-1 chars. */
-static void cvm_norm_path(const char *p, char *out) {
-    if (!p) { out[0] = 0; return; }
-    while (p[0] == '.' && p[1] == '/') p += 2;   /* "./" */
-    while (p[0] == '/') ++p;                       /* leading slashes */
-    size_t n = strlen(p);
-    while (n > 0 && p[n-1] == '/') --n;            /* trailing slash */
-    if (n == 1 && p[0] == '.') n = 0;              /* bare "." -> root */
-    if (n >= RAMFS_NAME) n = RAMFS_NAME - 1;
-    memcpy(out, p, n); out[n] = 0;
-}
+/* cvm_norm_path / cvm_path_eq are defined up in the RAM-FS section. */
 
 #define CVM_DIR_DEDUP 64
 struct __cvm_DIR {
@@ -1744,7 +1755,7 @@ int stat(const char *path, struct stat *buf) {
         buf->st_size = (off_t)g_fs[slot].len;
         return 0;
     }
-    if (g_rom_path && cron_rom_size() > 0 && strcmp(path, g_rom_path) == 0) {
+    if (g_rom_path && cron_rom_size() > 0 && cvm_path_eq(path, g_rom_path)) {
         buf->st_mode = S_IFREG | 0644;
         buf->st_size = (off_t)cron_rom_size();
         return 0;
@@ -1794,9 +1805,13 @@ int fstat(int fd, struct stat *buf) {
 /* ============================== unistd.h =============================== */
 
 int access(const char *path, int mode) {
-    (void)mode; ramfs_load();
-    if (path && ramfs_find(path) >= 0) return 0;
-    errno = ENOENT; return -1;
+    /* Existence/readability only (no real perms). Delegate to stat() so the
+     * ROM-backed file and implicit directories are recognised, not just
+     * RAM-FS entries — uio's stdio fs probes files with access() before
+     * opening them. */
+    (void)mode;
+    struct stat st;
+    return stat(path, &st);   /* sets errno = ENOENT on miss */
 }
 int unlink(const char *path) { return remove(path); }
 char *getcwd(char *buf, size_t size) {
