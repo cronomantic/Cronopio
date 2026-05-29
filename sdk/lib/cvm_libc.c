@@ -260,6 +260,24 @@ char *strtok(char *str, const char *delim) {
     return tok;
 }
 
+size_t strspn(const char *s, const char *accept) {
+    const char *p = s;
+    while (*p && strchr(accept, *p)) p++;
+    return (size_t)(p - s);
+}
+
+size_t strcspn(const char *s, const char *reject) {
+    const char *p = s;
+    while (*p && !strchr(reject, *p)) p++;
+    return (size_t)(p - s);
+}
+
+char *strpbrk(const char *s, const char *accept) {
+    for (; *s; ++s)
+        if (strchr(accept, *s)) return (char *)s;
+    return NULL;
+}
+
 char *strerror(int errnum) {
     (void)errnum;
     return (char *)"error";

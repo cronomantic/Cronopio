@@ -27,6 +27,9 @@ char  *strstr(const char *haystack, const char *needle);
 char  *strdup(const char *s);
 char  *strndup(const char *s, size_t n);
 char  *strtok(char *str, const char *delim);
+size_t strspn(const char *s, const char *accept);
+size_t strcspn(const char *s, const char *reject);
+char  *strpbrk(const char *s, const char *accept);
 char  *strerror(int errnum);
 
 #endif /* CVM_LIBC_STRING_H */
