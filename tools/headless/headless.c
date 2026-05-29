@@ -4,7 +4,21 @@
  * histogram of the 8 bpp framebuffer (palette index -> pixel count). Used to
  * verify a cart renders the expected colours without opening a window.
  *
- *   headless cart.bin [frames]
+ *   headless cart.bin [frames] [out.ppm] [--pad=script.txt]
+ *
+ * --pad scripts the gamepad so interactive carts (menus, gameplay) can be
+ * driven + verified headless. The script is one directive per line:
+ *
+ *     <frame> <TOKEN> [TOKEN...]      # pad = OR of these buttons AT <frame>,
+ *     <frame> NONE                    #   held until the next directive
+ *     # comment
+ *
+ * TOKENs: UP DOWN LEFT RIGHT A B X Y L R START SELECT (case-insensitive).
+ * Example (tap DOWN at frame 30, SELECT at 90):
+ *     30 DOWN
+ *     31 NONE
+ *     90 A
+ *     91 NONE
  */
 #include "console.h"
 #include "syscalls.h"
@@ -13,6 +27,89 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+/* ---- optional scripted gamepad input (--pad=FILE) ---- */
+/* Bit layout mirrors the SDK enum CRON_BTN_* in sdk/include/cronopio.h. */
+#define PAD_BIT_UP    (1u<<0)
+#define PAD_BIT_DOWN  (1u<<1)
+#define PAD_BIT_LEFT  (1u<<2)
+#define PAD_BIT_RIGHT (1u<<3)
+#define PAD_BIT_A     (1u<<4)
+#define PAD_BIT_B     (1u<<5)
+#define PAD_BIT_X     (1u<<6)
+#define PAD_BIT_Y     (1u<<7)
+#define PAD_BIT_L     (1u<<8)
+#define PAD_BIT_R     (1u<<9)
+#define PAD_BIT_START (1u<<10)
+#define PAD_BIT_SEL   (1u<<11)
+
+#define PAD_MAX_DIRECTIVES 8192
+static struct { int frame; uint32_t mask; } g_pad[PAD_MAX_DIRECTIVES];
+static int g_pad_n = 0;
+
+static int streq_ci(const char* a, const char* b) {
+    for (; *a && *b; ++a, ++b) {
+        int ca = (*a >= 'a' && *a <= 'z') ? *a - 32 : *a;
+        int cb = (*b >= 'a' && *b <= 'z') ? *b - 32 : *b;
+        if (ca != cb) return 0;
+    }
+    return *a == *b;
+}
+
+static uint32_t pad_token(const char* t) {
+    if (streq_ci(t, "UP"))    return PAD_BIT_UP;
+    if (streq_ci(t, "DOWN"))  return PAD_BIT_DOWN;
+    if (streq_ci(t, "LEFT"))  return PAD_BIT_LEFT;
+    if (streq_ci(t, "RIGHT")) return PAD_BIT_RIGHT;
+    if (streq_ci(t, "A"))     return PAD_BIT_A;
+    if (streq_ci(t, "B"))     return PAD_BIT_B;
+    if (streq_ci(t, "X"))     return PAD_BIT_X;
+    if (streq_ci(t, "Y"))     return PAD_BIT_Y;
+    if (streq_ci(t, "L"))     return PAD_BIT_L;
+    if (streq_ci(t, "R"))     return PAD_BIT_R;
+    if (streq_ci(t, "START")) return PAD_BIT_START;
+    if (streq_ci(t, "SELECT"))return PAD_BIT_SEL;
+    if (streq_ci(t, "NONE"))  return 0;
+    fprintf(stderr, "warning: --pad: unknown token '%s'\n", t);
+    return 0;
+}
+
+static void load_pad_script(const char* path) {
+    FILE* f = fopen(path, "r");
+    if (!f) { perror(path); return; }
+    char line[256];
+    while (fgets(line, sizeof line, f)) {
+        char* p = line;
+        while (*p == ' ' || *p == '\t') ++p;
+        if (*p == '#' || *p == '\n' || *p == '\0') continue;
+        char* tok = strtok(p, " \t\r\n");
+        if (!tok) continue;
+        int frame = atoi(tok);
+        uint32_t mask = 0;
+        while ((tok = strtok(NULL, " \t\r\n")) != NULL)
+            mask |= pad_token(tok);
+        if (g_pad_n < PAD_MAX_DIRECTIVES) {
+            g_pad[g_pad_n].frame = frame;
+            g_pad[g_pad_n].mask = mask;
+            ++g_pad_n;
+        }
+    }
+    fclose(f);
+    fprintf(stderr, "[pad] loaded %d directive(s) from %s\n", g_pad_n, path);
+}
+
+/* The pad mask in effect at frame f = the last directive with frame <= f. */
+static uint32_t pad_mask_at(int f) {
+    uint32_t mask = 0;
+    int best = -1;
+    for (int i = 0; i < g_pad_n; ++i) {
+        if (g_pad[i].frame <= f && g_pad[i].frame >= best) {
+            best = g_pad[i].frame;
+            mask = g_pad[i].mask;
+        }
+    }
+    return mask;
+}
 
 /* Defined in the SDL host; the common layer calls it for sys_time_ms. A frozen
  * clock makes time-driven carts (e.g. DOOM, whose title/demo state machine only
@@ -35,8 +132,21 @@ static uint8_t* slurp(const char* path, size_t* out_len) {
 }
 
 int main(int argc, char** argv) {
-    if (argc < 2) { fprintf(stderr, "usage: %s cart.bin [frames]\n", argv[0]); return 1; }
-    int frames = (argc >= 3) ? atoi(argv[2]) : 1;
+    if (argc < 2) {
+        fprintf(stderr, "usage: %s cart.bin [frames] [out.ppm] [--pad=script]\n", argv[0]);
+        return 1;
+    }
+    int frames = 1;
+    const char* ppmpath = NULL;
+    for (int a = 2; a < argc; ++a) {
+        if (strncmp(argv[a], "--pad=", 6) == 0) {
+            load_pad_script(argv[a] + 6);
+        } else if (strstr(argv[a], ".ppm")) {
+            ppmpath = argv[a];
+        } else {
+            frames = atoi(argv[a]);
+        }
+    }
 
     size_t blob_len = 0;
     uint8_t* blob = slurp(argv[1], &blob_len);
@@ -71,6 +181,10 @@ int main(int argc, char** argv) {
     for (int f = 0; f < frames && !console.cart_exited; ++f) {
         g_frame_ms = (uint64_t)f * 1000u / 60u;   /* virtual 60Hz clock */
         cronopio_console_begin_frame(&console);
+        /* Inject scripted pad input (after begin_frame so pad_prev holds the
+         * previous mask → pad_pressed edge detection works). */
+        if (g_pad_n)
+            cron_input_set_pad(&console, 0, pad_mask_at(f));
         if (console.frame_fn_index > 0) {
             int32_t fr = 0;
             rc = cvm_call(&img, (uint32_t)console.frame_fn_index, NULL, 0, &fr);
@@ -106,10 +220,10 @@ int main(int argc, char** argv) {
 
     /* Optional PPM screenshot: `headless cart.bin [frames] [out.ppm]`. Packs
      * the 8bpp framebuffer through the cart palette into RGB and writes a P6. */
-    if (argc >= 4) {
+    if (ppmpath) {
         static uint32_t rgba[CRONOPIO_FB_BYTES];
         cronopio_console_blit_rgba(&console, img.heap, rgba);
-        FILE* p = fopen(argv[3], "wb");
+        FILE* p = fopen(ppmpath, "wb");
         if (p) {
             fprintf(p, "P6\n%d %d\n255\n", CRONOPIO_SCREEN_W, CRONOPIO_SCREEN_H);
             for (int i = 0; i < CRONOPIO_FB_BYTES; ++i) {
@@ -119,7 +233,7 @@ int main(int argc, char** argv) {
                 fwrite(rgb, 1, 3, p);
             }
             fclose(p);
-            printf("wrote screenshot %s\n", argv[3]);
+            printf("wrote screenshot %s\n", ppmpath);
         }
     }
 

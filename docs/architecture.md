@@ -114,7 +114,14 @@ the cart's `frame()` callback in whatever order the cart picks.
 **`tools/headless/`** — windowless cart runners that link only
 `host/common/` (no SDL). `cronopio-headless` drives N frames and prints
 a framebuffer histogram (and an optional PPM), for CI / "does this cart
-render" checks. `cronopio-headless-prof` is the same harness built
+render" checks. It can also **script gamepad input** for headless testing
+of interactive carts (menus, gameplay): `--pad=script.txt`, one directive
+per line `<frame> <TOKEN>...` (TOKENs: UP DOWN LEFT RIGHT A B X Y L R START
+SELECT, or NONE), where the pad is set to the OR of those buttons at that
+frame and held until the next directive. The injection happens after
+`begin_frame` so `cron_pad_pressed` edge-detection works. (Usage:
+`cronopio-headless cart.bin [frames] [out.ppm] [--pad=script]`.)
+`cronopio-headless-prof` is the same harness built
 against a `-DCVM_PROFILE` CronoVM (see CronoVM `CHANGELOG`): it ranks
 functions by interpreter self-time, resolving names from the `CVM_SYMS`
 `<cart>.bin.sym` sidecar, with a `warmup` arg to drop startup cost and a
