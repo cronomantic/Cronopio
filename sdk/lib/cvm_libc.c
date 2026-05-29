@@ -1611,19 +1611,184 @@ void perror(const char *s) {
     cron_log(e, (int32_t)sizeof(e) - 1);
 }
 
+/* ===================== dirent.h — directory enumeration ================ */
+/* The RAM-FS stores files by full path and the ROM blob is one file at
+ * g_rom_path. Directories are implicit: opendir()/readdir() synthesise a
+ * listing by walking every stored path (plus the ROM file) and emitting the
+ * immediate child component under the queried directory, de-duplicated.
+ * Faithful enough for ports that scan a directory (UQM's uio stdio fs). */
+
+#include <dirent.h>
+
+/* Normalise a path for prefix matching: drop leading "./" and "/", drop a
+ * trailing "/", collapse "."/""/"/" to the empty root prefix. Writes at most
+ * RAMFS_NAME-1 chars. */
+static void cvm_norm_path(const char *p, char *out) {
+    if (!p) { out[0] = 0; return; }
+    while (p[0] == '.' && p[1] == '/') p += 2;   /* "./" */
+    while (p[0] == '/') ++p;                       /* leading slashes */
+    size_t n = strlen(p);
+    while (n > 0 && p[n-1] == '/') --n;            /* trailing slash */
+    if (n == 1 && p[0] == '.') n = 0;              /* bare "." -> root */
+    if (n >= RAMFS_NAME) n = RAMFS_NAME - 1;
+    memcpy(out, p, n); out[n] = 0;
+}
+
+#define CVM_DIR_DEDUP 64
+struct __cvm_DIR {
+    char prefix[RAMFS_NAME];          /* normalised dir, "" = root */
+    int  next;                        /* next g_fs[] index to scan */
+    int  rom_done;                    /* ROM file already considered */
+    int  n_emitted;
+    char emitted[CVM_DIR_DEDUP][RAMFS_NAME];
+    struct dirent ent;                /* storage for the non-_r readdir() */
+};
+
+/* Does normalised `nm` live directly or indirectly under normalised
+ * `prefix`? If so, copy its immediate child component into `child` and set
+ * *is_dir (a child with a further '/' after it is a subdirectory). */
+static int cvm_dir_child(const char *prefix, const char *nm,
+                         char *child, int *is_dir) {
+    const char *rem;
+    if (prefix[0] == 0) {
+        rem = nm;
+    } else {
+        size_t pl = strlen(prefix);
+        if (strncmp(nm, prefix, pl) != 0 || nm[pl] != '/') return 0;
+        rem = nm + pl + 1;
+    }
+    if (rem[0] == 0) return 0;        /* the directory itself */
+    size_t k = 0;
+    while (rem[k] && rem[k] != '/') ++k;
+    if (k == 0 || k >= RAMFS_NAME) return 0;
+    memcpy(child, rem, k); child[k] = 0;
+    *is_dir = (rem[k] == '/');
+    return 1;
+}
+
+DIR *opendir(const char *path) {
+    ramfs_load();
+    DIR *d = (DIR *)malloc(sizeof *d);
+    if (!d) { errno = ENOMEM; return NULL; }
+    cvm_norm_path(path, d->prefix);
+    d->next = 0; d->rom_done = 0; d->n_emitted = 0;
+    return d;
+}
+
+int readdir_r(DIR *d, struct dirent *entry, struct dirent **result) {
+    if (!d) { errno = EBADF; if (result) *result = NULL; return EBADF; }
+    char child[RAMFS_NAME]; int is_dir;
+    for (;;) {
+        const char *nm = NULL;
+        char rom_norm[RAMFS_NAME];
+        if (d->next < RAMFS_MAX) {
+            int i = d->next++;
+            if (!g_fs[i].used) continue;
+            nm = g_fs[i].name;
+        } else if (!d->rom_done) {
+            d->rom_done = 1;
+            if (g_rom_path && cron_rom_size() > 0) {
+                cvm_norm_path(g_rom_path, rom_norm);
+                nm = rom_norm;
+            } else continue;
+        } else {
+            if (result) *result = NULL;     /* end of directory */
+            return 0;
+        }
+        char nm_norm[RAMFS_NAME];
+        cvm_norm_path(nm, nm_norm);
+        if (!cvm_dir_child(d->prefix, nm_norm, child, &is_dir)) continue;
+        /* de-dup (subdirs appear once even if many files live under them) */
+        int dup = 0;
+        for (int e = 0; e < d->n_emitted; ++e)
+            if (strcmp(d->emitted[e], child) == 0) { dup = 1; break; }
+        if (dup) continue;
+        if (d->n_emitted < CVM_DIR_DEDUP)
+            snprintf(d->emitted[d->n_emitted++], RAMFS_NAME, "%s", child);
+        entry->d_ino = 1;
+        entry->d_type = is_dir ? DT_DIR : DT_REG;
+        snprintf(entry->d_name, sizeof entry->d_name, "%s", child);
+        if (result) *result = entry;
+        return 0;
+    }
+}
+
+struct dirent *readdir(DIR *d) {
+    if (!d) { errno = EBADF; return NULL; }
+    struct dirent *res = NULL;
+    if (readdir_r(d, &d->ent, &res) != 0) return NULL;
+    return res;
+}
+
+void rewinddir(DIR *d) {
+    if (d) { d->next = 0; d->rom_done = 0; d->n_emitted = 0; }
+}
+
+int closedir(DIR *d) {
+    if (!d) { errno = EBADF; return -1; }
+    free(d);
+    return 0;
+}
+
 /* ============================== sys/stat.h ============================= */
-/* No filesystem: stat reports failure, mkdir does nothing. */
+/* No real perms; report regular files (RAM-FS + ROM) and implicit dirs. */
 
 int stat(const char *path, struct stat *buf) {
-    (void)path; (void)buf;
+    if (!path || !buf) { errno = EFAULT; return -1; }
+    ramfs_load();
+    memset(buf, 0, sizeof *buf);
+
+    int slot = ramfs_find(path);
+    if (slot >= 0) {
+        buf->st_mode = S_IFREG | 0644;
+        buf->st_size = (off_t)g_fs[slot].len;
+        return 0;
+    }
+    if (g_rom_path && cron_rom_size() > 0 && strcmp(path, g_rom_path) == 0) {
+        buf->st_mode = S_IFREG | 0644;
+        buf->st_size = (off_t)cron_rom_size();
+        return 0;
+    }
+    /* A directory exists iff some stored path (or the ROM file) lives under
+     * it. The empty/root prefix always exists. */
+    char prefix[RAMFS_NAME]; cvm_norm_path(path, prefix);
+    char child[RAMFS_NAME]; int is_dir;
+    int exists = (prefix[0] == 0);
+    for (int i = 0; !exists && i < RAMFS_MAX; ++i) {
+        if (!g_fs[i].used) continue;
+        char nm[RAMFS_NAME]; cvm_norm_path(g_fs[i].name, nm);
+        if (cvm_dir_child(prefix, nm, child, &is_dir)) exists = 1;
+    }
+    if (!exists && g_rom_path && cron_rom_size() > 0) {
+        char nm[RAMFS_NAME]; cvm_norm_path(g_rom_path, nm);
+        if (cvm_dir_child(prefix, nm, child, &is_dir)) exists = 1;
+    }
+    if (exists) { buf->st_mode = S_IFDIR | 0755; return 0; }
     errno = ENOENT;
     return -1;
 }
 
+/* Directories are implicit (a path prefix), so creating one always
+ * "succeeds" — there is nothing to allocate until a file is written under it. */
 int mkdir(const char *path, unsigned int mode) {
     (void)path; (void)mode;
-    errno = ENOENT;
-    return -1;
+    return 0;
+}
+
+/* Removing an implicit directory is a no-op success (the entries under it, if
+ * any, are removed by unlink()ing the files themselves). */
+int rmdir(const char *path) { (void)path; return 0; }
+
+/* fstat over the fd table: an open fd is always a regular file (RAM-FS or
+ * ROM-backed); report its size. */
+int fstat(int fd, struct stat *buf) {
+    FILE *fp = fd_file(fd);
+    if (!fp || !buf) { errno = EBADF; return -1; }
+    memset(buf, 0, sizeof *buf);
+    buf->st_mode = S_IFREG | 0644;
+    buf->st_size = fp->is_rom ? (off_t)cron_rom_size()
+                              : (off_t)g_fs[fp->slot].len;
+    return 0;
 }
 
 /* ============================== unistd.h =============================== */

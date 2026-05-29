@@ -15,6 +15,7 @@
 
 int   access(const char *path, int mode);
 int   unlink(const char *path);
+int   rmdir(const char *path);
 char *getcwd(char *buf, size_t size);
 
 /* POSIX fd-level I/O (open() is in <fcntl.h>). A thin fd table over fopen() in
