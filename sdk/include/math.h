@@ -139,4 +139,12 @@ static inline float round(float x) { return roundf(x); }
 static inline long lroundf(float x) { return (long)roundf(x); }
 static inline long lround(float x) { return lroundf(x); }
 
+/* Double-precision math from picolibc's libm (f64 → soft-float runtime). The
+ * hand-written set above is float-only (DOOM/Quake heritage); these are declared
+ * on demand for code that needs real doubles — UQM's planet-surface generator
+ * (plangen acos(), pl_stuff exp()). Add more (log/pow/...) here as engines need
+ * them, with the matching source in runtime/lib/build_picolibc.sh. */
+extern double exp(double x);
+extern double acos(double x);
+
 #endif /* CVM_LIBC_MATH_H */
