@@ -474,8 +474,11 @@ int main(int argc, char **argv) {
     const char *title = NULL, *author = NULL, *controls = NULL, *outpath = NULL;
     int have_heap = 0, have_stack = 0, verbose = 0;
 
-    /* Collect pass-through args; intercept only the few we care about. */
-    char *fwd[256];
+    /* Collect pass-through args; intercept only the few we care about. There can
+     * never be more forwarded tokens than argc, so size exactly off it (a
+     * whole-engine build — e.g. UQM — forwards ~270 source paths). */
+    char **fwd = (char **)malloc((size_t)argc * sizeof *fwd);
+    if (!fwd) { fprintf(stderr, "cronopio-cc: out of memory\n"); return 1; }
     int   nf = 0;
     for (int i = 1; i < argc; ++i) {
         const char *a = argv[i];
@@ -490,7 +493,6 @@ int main(int argc, char **argv) {
         if (strncmp(a, "--stack-reserve=", 16) == 0) have_stack = 1;
         if (strcmp(a, "-o") == 0 && i + 1 < argc) outpath = argv[i + 1];
         if (strcmp(a, "-v") == 0 || strcmp(a, "--verbose") == 0) verbose = 1;
-        if (nf >= 240) { fprintf(stderr, "cronopio-cc: too many arguments\n"); return 2; }
         fwd[nf++] = (char *)a;
     }
 
@@ -499,8 +501,10 @@ int main(int argc, char **argv) {
     if (!sdk) sdk = strdup(CRONOPIO_SDK_INCLUDE);
 
     /* argv for cvm-cc: <cvm-cc> <baked defaults> <forwarded user args>.
-     * cvm-cc takes the include dir as a separate token (-I <dir>). */
-    char *cargv[256 + 16];
+     * cvm-cc takes the include dir as a separate token (-I <dir>). Sized off the
+     * forwarded count: nf forwarded + at most ~10 baked tokens + meta + NULL. */
+    char **cargv = (char **)malloc((size_t)(nf + 16) * sizeof *cargv);
+    if (!cargv) { fprintf(stderr, "cronopio-cc: out of memory\n"); free(fwd); return 1; }
     int   n = 0;
     cargv[n++] = cvm_cc;
     cargv[n++] = (char *)CRON_REGION_FB;
@@ -520,12 +524,12 @@ int main(int argc, char **argv) {
     if (have_meta) {
         if (!outpath) {
             fprintf(stderr, "cronopio-cc: --title/--author/--controls require -o <output>\n");
-            free(cvm_cc); free(sdk);
+            free(cvm_cc); free(sdk); free(fwd); free(cargv);
             return 2;
         }
         snprintf(metapath, sizeof metapath, "%s.cmeta", outpath);
         if (write_meta_file(metapath, title, author, controls) != 0) {
-            free(cvm_cc); free(sdk);
+            free(cvm_cc); free(sdk); free(fwd); free(cargv);
             return 1;
         }
         snprintf(metaarg, sizeof metaarg, "--meta=%s", metapath);
@@ -534,7 +538,7 @@ int main(int argc, char **argv) {
     cargv[n] = NULL;
 
     int rc = run_cmd(verbose, cargv);
-    free(cvm_cc); free(sdk);
+    free(cvm_cc); free(sdk); free(fwd); free(cargv);
     if (have_meta) remove(metapath);   /* the blob is baked into the .bin now */
     if (rc != 0) {
         fprintf(stderr, "cronopio-cc: cvm-cc failed (exit %d)\n", rc);
