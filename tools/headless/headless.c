@@ -178,7 +178,13 @@ int main(int argc, char** argv) {
         fprintf(stderr, "entry trap: %s\n", cvm_strerror(rc)); return 1;
     }
 
+    /* Optional live per-frame progress to stderr (CRON_HL_PROGRESS=1). The
+     * frame number is printed BEFORE the frame fn runs, so if a frame stalls
+     * (e.g. heavy one-time work that doesn't yield), you see it stuck on that
+     * number — distinguishing a slow-but-progressing run from a hang. */
+    int hl_progress = getenv("CRON_HL_PROGRESS") != NULL;
     for (int f = 0; f < frames && !console.cart_exited; ++f) {
+        if (hl_progress) { fprintf(stderr, "[frame %d/%d]\n", f, frames); fflush(stderr); }
         g_frame_ms = (uint64_t)f * 1000u / 60u;   /* virtual 60Hz clock */
         cronopio_console_begin_frame(&console);
         /* Inject scripted pad input (after begin_frame so pad_prev holds the
