@@ -47,6 +47,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <errno.h>
+#include <locale.h>
 #include <time.h>
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -56,10 +57,6 @@
 
 int errno = 0;
 
-/* Varargs-free formatter cores, defined in the stdio section below. Declared
- * here so earlier users (e.g. the assert helper) can call them. */
-int cvm_vsnprintf_buf(char *str, size_t size, const char *fmt, const void *args);
-int cvm_vsscanf(const char *str, const char *fmt, va_list ap);
 
 /* ============================== ctype.h ================================= */
 /* picolibc owns isdigit/isupper/islower/isalpha/isalnum/isspace/isxdigit +
@@ -325,644 +322,35 @@ void abort(void) {
 
 void atexit_unsupported(void) { }
 
-/* assert() support helper (declared in <assert.h>): log the failed expression
- * with its file and line, then terminate the cart. Uses the varargs-free
- * formatter core (cvm_vsnprintf_buf) so it translates without va_start. */
+/* assert() support helper (declared in <assert.h>): format the failed
+ * expression with snprintf (picolibc) and log it, then terminate the cart. */
 void _cvm_assert_fail(const char *expr, const char *file, int line) {
     char buf[256];
-    /* argument block for "%s, file %s, line %d": three 4-byte slots */
-    const void *args[3];
-    args[0] = expr;
-    args[1] = file;
-    *(int *)&args[2] = line;
-    int n = cvm_vsnprintf_buf(buf, sizeof buf,
-                              "assertion failed: %s, file %s, line %d\n", args);
+    int n = snprintf(buf, sizeof buf,
+                     "assertion failed: %s, file %s, line %d\n", expr, file, line);
     int emit = n < (int)sizeof buf ? n : (int)sizeof buf - 1;
     cron_log(buf, emit);
     cron_exit(1);
     for (;;) { }
 }
 
-/* ============================== stdio.h ================================ */
+/* ============================== stdio.h ================================ *
+ * The stdio IMPLEMENTATION is picolibc's tinystdio (printf/scanf/FILE/fopen, in
+ * picolibc.bc built --with-stdio). This file provides the POSIX backend it sits
+ * on -- open/read/write/lseek/close over the RAM-FS + ROM (below) -- plus the
+ * one math hook its float formatter needs. The RAM-FS is a small persisted
+ * "memory card"; the baked --rom blob backs a read-only file (cron_rom_mount).*/
 
-/* FILE handles. The standard streams are NULL (see below) and the printf family
- * routes to cron_log regardless. A non-NULL FILE* is a handle into the RAM
- * filesystem (a small persisted "memory card", see the file-I/O section): every
- * fopen()'d file lives in RAM and is serialised to the host save blob on close.
- * Bundled read-only assets still come from the cartridge ROM (cron_rom). */
-struct _CVM_FILE { int slot; unsigned int pos; int writing; int eofbit; int is_rom; };
-/* The translator only serialises pointer globals when the initialiser is NULL
- * (it cannot relocate the address of another global, nor an inttoptr constant
- * expr). So the three standard streams are NULL pointers. That is fine here:
- * the printf/puts family route to cron_log regardless of the stream, and the
- * kept DOOM sources never compare a stream against stdout/stderr nor
- * dereference one (verified by grep). A port that truly needs distinct stream
- * identities should set these from main() at runtime to the addresses of
- * static FILE objects. */
-FILE *stdin  = NULL;
-FILE *stdout = NULL;
-FILE *stderr = NULL;
+/* tinystdio's float formatter bit-tests doubles via __isnand (isnan(double)). */
+int __isnand(double x) { return x != x; }
 
-/* ---- core formatter ---------------------------------------------------- */
-
-/* Output sink for cvm_vfmt: writes into a caller buffer of capacity `cap`
- * (NUL-terminated when room), counting every byte that *would* be written so
- * snprintf can report the full length like the C standard requires. */
-typedef struct {
-    char  *buf;
-    size_t cap;     /* including the NUL slot */
-    size_t len;     /* bytes written so far (capped to cap-1) */
-    size_t total;   /* bytes that would have been written (uncapped) */
-} _cvm_sink;
-
-static __attribute__((noinline))
-void _sink_putc(_cvm_sink *s, char c) {
-    if (s->buf && s->cap && s->len + 1 < s->cap) {
-        s->buf[s->len++] = c;
-    }
-    s->total++;
-}
-
-/* Emit an unsigned value in the given base. digits buffer is built in reverse.
- * Used for d/i/u/x/X/o/p. No 64-bit math. */
-static void _sink_uint(_cvm_sink *s, unsigned long val, int base, int upper,
-                       int width, int prec, int flags, int neg);
-
-/* flag bits */
-#define FL_MINUS   0x01   /* '-' left-justify           */
-#define FL_PLUS    0x02   /* '+' always sign            */
-#define FL_SPACE   0x04   /* ' ' space before positive  */
-#define FL_HASH    0x08   /* '#' alternate form         */
-#define FL_ZERO    0x10   /* '0' zero pad               */
-
-static __attribute__((noinline))
-void _sink_pad(_cvm_sink *s, char c, int n) {
-    while (n-- > 0) _sink_putc(s, c);
-}
-
-static __attribute__((noinline))
-void _sink_uint(_cvm_sink *s, unsigned long val, int base, int upper,
-                       int width, int prec, int flags, int neg) {
-    char tmp[32];
-    const char *digs = upper ? "0123456789ABCDEF" : "0123456789abcdef";
-    int n = 0;
-
-    if (val == 0) {
-        if (prec != 0) tmp[n++] = '0';   /* prec 0 with value 0 => no digits */
-    } else {
-        while (val) {
-            tmp[n++] = digs[val % (unsigned long)base];
-            val /= (unsigned long)base;
-        }
-    }
-
-    /* precision: minimum number of digits */
-    int zeros = 0;
-    if (prec > n) zeros = prec - n;
-
-    /* sign / prefix length */
-    char sign = 0;
-    if (neg) sign = '-';
-    else if (flags & FL_PLUS) sign = '+';
-    else if (flags & FL_SPACE) sign = ' ';
-
-    int prefixlen = 0;
-    char prefix0 = 0, prefix1 = 0;
-    if ((flags & FL_HASH) && base == 16 && (n > 0)) {
-        prefix0 = '0';
-        prefix1 = upper ? 'X' : 'x';
-        prefixlen = 2;
-    } else if ((flags & FL_HASH) && base == 8 && (zeros == 0) &&
-               (n == 0 || tmp[n - 1] != '0')) {
-        /* octal alternate form: ensure a leading 0 */
-        zeros = (zeros < 1) ? 1 : zeros;
-    }
-
-    int bodylen = n + zeros + (sign ? 1 : 0) + prefixlen;
-    int padlen = width > bodylen ? width - bodylen : 0;
-
-    /* zero padding only when not left-justified and no explicit precision */
-    int zeropad = 0;
-    if ((flags & FL_ZERO) && !(flags & FL_MINUS) && prec < 0) {
-        zeropad = padlen;
-        padlen = 0;
-    }
-
-    if (!(flags & FL_MINUS)) _sink_pad(s, ' ', padlen);
-    if (sign) _sink_putc(s, sign);
-    if (prefixlen) { _sink_putc(s, prefix0); _sink_putc(s, prefix1); }
-    _sink_pad(s, '0', zeropad);
-    _sink_pad(s, '0', zeros);
-    while (n > 0) _sink_putc(s, tmp[--n]);
-    if (flags & FL_MINUS) _sink_pad(s, ' ', padlen);
-}
-
-static __attribute__((noinline))
-void _sink_str(_cvm_sink *s, const char *str, int width, int prec,
-                      int flags) {
-    if (!str) str = "(null)";
-    /* Body-increment counter (see strlen): the header-phi form
-     * `while (str[len] ...) len++;` is miscounted by one by the translator. */
-    int len = 0;
-    {
-        const char *p = str;
-        while (*p != '\0' && (prec < 0 || len < prec)) { p++; len++; }
-    }
-    int padlen = width > len ? width - len : 0;
-    if (!(flags & FL_MINUS)) _sink_pad(s, ' ', padlen);
-    for (int i = 0; i < len; i++) _sink_putc(s, str[i]);
-    if (flags & FL_MINUS) _sink_pad(s, ' ', padlen);
-}
-
-/* Minimal float formatter (f32 only — no double). Default precision 6. No
- * round-to-even; truncating-with-carry is good enough for the rare float the
- * port prints. Handles sign, integer part, and `prec` fractional digits.
- * Magnitudes beyond ~2e9 lose precision (32-bit integer split) but DOOM does
- * not print large floats. */
-static __attribute__((noinline))
-void _sink_float(_cvm_sink *s, float val, int width, int prec,
-                        int flags, int upper) {
-    (void)upper;
-    if (prec < 0) prec = 6;
-
-    int neg = 0;
-    if (val < 0.0f) { neg = 1; val = -val; }
-
-    /* split into integer and fractional parts using 32-bit ints */
-    unsigned long ipart = (unsigned long)val;
-    float frac = val - (float)ipart;
-
-    /* scale the fraction to `prec` digits with rounding */
-    float scale = 1.0f;
-    for (int i = 0; i < prec; i++) scale *= 10.0f;
-    unsigned long fpart = (unsigned long)(frac * scale + 0.5f);
-    /* carry from rounding the fraction up to a whole unit */
-    {
-        unsigned long lim = (unsigned long)(scale + 0.5f);
-        if (prec > 0 && fpart >= lim) { fpart -= lim; ipart += 1; }
-    }
-
-    /* render integer part (reversed) */
-    char ibuf[16];
-    int in = 0;
-    if (ipart == 0) ibuf[in++] = '0';
-    else while (ipart) { ibuf[in++] = (char)('0' + (int)(ipart % 10)); ipart /= 10; }
-
-    /* render fractional part forward */
-    char fbuf[16];
-    int fn = 0;
-    if (prec > 0) {
-        unsigned long div = (unsigned long)(scale + 0.5f);
-        for (int i = 0; i < prec && fn < (int)sizeof(fbuf); i++) {
-            div /= 10;
-            unsigned long dig = div ? (fpart / div) % 10 : fpart % 10;
-            fbuf[fn++] = (char)('0' + (int)dig);
-        }
-    }
-
-    char sign = 0;
-    if (neg) sign = '-';
-    else if (flags & FL_PLUS) sign = '+';
-    else if (flags & FL_SPACE) sign = ' ';
-
-    int bodylen = in + (prec > 0 ? prec + 1 : 0) + (sign ? 1 : 0);
-    int padlen = width > bodylen ? width - bodylen : 0;
-    int zeropad = 0;
-    if ((flags & FL_ZERO) && !(flags & FL_MINUS)) { zeropad = padlen; padlen = 0; }
-
-    if (!(flags & FL_MINUS)) _sink_pad(s, ' ', padlen);
-    if (sign) _sink_putc(s, sign);
-    _sink_pad(s, '0', zeropad);
-    while (in > 0) _sink_putc(s, ibuf[--in]);
-    if (prec > 0) {
-        _sink_putc(s, '.');
-        for (int i = 0; i < fn; i++) _sink_putc(s, fbuf[i]);
-    }
-    if (flags & FL_MINUS) _sink_pad(s, ' ', padlen);
-}
-
-/* The formatter core. noinline: it is large and called from many wrappers;
- * inlining it everywhere would blow the register budget. */
-static __attribute__((noinline))
-int cvm_vfmt(char *out, size_t cap, const char *fmt, va_list ap) {
-    _cvm_sink s;
-    s.buf = out; s.cap = cap; s.len = 0; s.total = 0;
-
-    while (*fmt) {
-        if (*fmt != '%') { _sink_putc(&s, *fmt++); continue; }
-        fmt++;  /* past '%' */
-
-        /* flags */
-        int flags = 0;
-        for (;;) {
-            if      (*fmt == '-') flags |= FL_MINUS;
-            else if (*fmt == '+') flags |= FL_PLUS;
-            else if (*fmt == ' ') flags |= FL_SPACE;
-            else if (*fmt == '#') flags |= FL_HASH;
-            else if (*fmt == '0') flags |= FL_ZERO;
-            else break;
-            fmt++;
-        }
-
-        /* width */
-        int width = 0;
-        if (*fmt == '*') {
-            width = va_arg(ap, int);
-            if (width < 0) { flags |= FL_MINUS; width = -width; }
-            fmt++;
-        } else {
-            while (isdigit((unsigned char)*fmt)) width = width * 10 + (*fmt++ - '0');
-        }
-
-        /* precision */
-        int prec = -1;
-        if (*fmt == '.') {
-            fmt++;
-            if (*fmt == '*') { prec = va_arg(ap, int); fmt++; if (prec < 0) prec = -1; }
-            else { prec = 0; while (isdigit((unsigned char)*fmt)) prec = prec * 10 + (*fmt++ - '0'); }
-        }
-
-        /* length modifiers — parsed and (mostly) ignored on a 32-bit target.
-         * We must still CONSUME the right amount from the va_list. `ll`/`L`/`j`
-         * push a 64-bit arg, but we MUST NOT do `va_arg(ap, long long)`: that
-         * emits an i64 load the translator rejects. Instead we consume the two
-         * 32-bit stack slots of the 64-bit arg with two `va_arg(ap, unsigned)`
-         * and format only the low 32 bits (little-endian: low half first). No
-         * i64 value is ever created. DOOM does not rely on the high half of a
-         * %lld. */
-        int len_ll = 0;     /* 1 if a 64-bit arg must be consumed */
-        if (*fmt == 'h') { fmt++; if (*fmt == 'h') fmt++; }
-        else if (*fmt == 'l') { fmt++; if (*fmt == 'l') { fmt++; len_ll = 1; } }
-        else if (*fmt == 'L') { fmt++; len_ll = 1; }
-        else if (*fmt == 'z') { fmt++; }
-        else if (*fmt == 'j') { fmt++; len_ll = 1; }
-        else if (*fmt == 't') { fmt++; }
-
-        char conv = *fmt;
-        if (conv == '\0') break;
-        fmt++;
-
-        switch (conv) {
-        case 'd':
-        case 'i': {
-            long v;
-            if (len_ll) {
-                /* consume the 64-bit arg as two 32-bit slots; keep the low
-                 * half (little-endian). Sign comes from the low half too,
-                 * which is correct for the small values DOOM passes. */
-                unsigned lo = va_arg(ap, unsigned);
-                (void)va_arg(ap, unsigned);   /* discard high half */
-                v = (long)(int)lo;
-            } else {
-                v = va_arg(ap, int);
-            }
-            int neg = 0;
-            unsigned long uv;
-            if (v < 0) { neg = 1; uv = (unsigned long)(-(v)); }
-            else uv = (unsigned long)v;
-            _sink_uint(&s, uv, 10, 0, width, prec, flags, neg);
-            break;
-        }
-        case 'u': {
-            unsigned long v;
-            if (len_ll) { v = (unsigned long)va_arg(ap, unsigned); (void)va_arg(ap, unsigned); }
-            else        { v = (unsigned long)va_arg(ap, unsigned int); }
-            _sink_uint(&s, v, 10, 0, width, prec, flags, 0);
-            break;
-        }
-        case 'x':
-        case 'X': {
-            unsigned long v;
-            if (len_ll) { v = (unsigned long)va_arg(ap, unsigned); (void)va_arg(ap, unsigned); }
-            else        { v = (unsigned long)va_arg(ap, unsigned int); }
-            _sink_uint(&s, v, 16, conv == 'X', width, prec, flags, 0);
-            break;
-        }
-        case 'o': {
-            unsigned long v;
-            if (len_ll) { v = (unsigned long)va_arg(ap, unsigned); (void)va_arg(ap, unsigned); }
-            else        { v = (unsigned long)va_arg(ap, unsigned int); }
-            _sink_uint(&s, v, 8, 0, width, prec, flags, 0);
-            break;
-        }
-        case 'p': {
-            void *ptr = va_arg(ap, void *);
-            unsigned long v = (unsigned long)(uintptr_t)ptr;
-            _sink_putc(&s, '0'); _sink_putc(&s, 'x');
-            _sink_uint(&s, v, 16, 0, 0, -1, 0, 0);
-            break;
-        }
-        case 'c': {
-            char ch = (char)va_arg(ap, int);
-            int padlen = width > 1 ? width - 1 : 0;
-            if (!(flags & FL_MINUS)) _sink_pad(&s, ' ', padlen);
-            _sink_putc(&s, ch);
-            if (flags & FL_MINUS) _sink_pad(&s, ' ', padlen);
-            break;
-        }
-        case 's': {
-            const char *str = va_arg(ap, const char *);
-            _sink_str(&s, str, width, prec, flags);
-            break;
-        }
-        case 'f': case 'F':
-        case 'g': case 'G':
-        case 'e': case 'E': {
-            /* A varargs float is promoted to `double` (f64) by the C ABI.
-             * When the cart enables the f64 runtime we read the double and
-             * format it through the real f32 formatter (good enough for the
-             * small magnitudes Quake/DOOM print: volumes, gamma, fov, …). This
-             * also fixes Cvar_SetValue, which round-trips floats through
-             * sprintf("%f")/atof. Without f64 we cannot form the value, so we
-             * consume the 8-byte slot and emit a zero placeholder. */
-#ifdef CVM_LIBC_ENABLE_F64
-            double _dv = va_arg(ap, double);
-            _sink_float(&s, (float)_dv, width, prec, flags,
-                        (conv == 'F' || conv == 'G' || conv == 'E'));
-#else
-            (void)va_arg(ap, unsigned);
-            (void)va_arg(ap, unsigned);
-            _sink_float(&s, 0.0f, width, prec, flags,
-                        (conv == 'F' || conv == 'G' || conv == 'E'));
-#endif
-            break;
-        }
-        case 'n': {
-            int *p = va_arg(ap, int *);
-            if (p) *p = (int)s.total;
-            break;
-        }
-        case '%':
-            _sink_putc(&s, '%');
-            break;
-        default:
-            /* unknown conversion: emit literally */
-            _sink_putc(&s, '%');
-            _sink_putc(&s, conv);
-            break;
-        }
-    }
-
-    if (s.buf && s.cap) {
-        size_t term = s.len < s.cap ? s.len : s.cap - 1;
-        s.buf[term] = '\0';
-    }
-    return (int)s.total;
-}
-
-/* ---- va_list cores (ALWAYS translatable) ------------------------------
- *
- * IMPORTANT TOOLCHAIN NOTE. The CronoVM translator does not implement the
- * `llvm.va_start` intrinsic (varargs are "not in the subset" — see
- * docs/translator.md). A C function that uses `va_start` (i.e. any `f(...)`
- * with `...`) therefore CANNOT be translated, and the LLVM `expand-variadics`
- * pass does not lower it for the i386-elf target either (that pass only
- * supports a few backends). So the variadic entry points (snprintf, printf,
- * sprintf, fprintf, sscanf) are guarded out by default — their mere
- * *definition* in the module would make the whole cart untranslatable, even
- * if never called.
- *
- * What IS always available and translates cleanly:
- *   - the va_list-taking cores below (vsnprintf/vsprintf/vprintf/vfprintf):
- *     on this target `va_list` is a plain `char*`, and `va_arg` lowers to
- *     pointer arithmetic + loads (no intrinsic), so these are fine; and
- *   - cvm_vsnprintf_buf(): a non-varargs helper that formats from a caller-
- *     built argument buffer. A DOOM-style port wraps its variadic call sites
- *     with these (or builds the buffer) so nothing in the cart needs varargs.
- *
- * The real variadic wrappers (printf/snprintf/sprintf/sscanf) are compiled
- * below: the CronoVM translator now lowers va_start (a variadic callee takes
- * all its args on the stack, so the va_list walks them), so C-ellipsis
- * functions translate and run. */
-
-int vsnprintf(char *str, size_t size, const char *fmt, va_list ap) {
-    return cvm_vfmt(str, size, fmt, ap);
-}
-
-int vsprintf(char *str, const char *fmt, va_list ap) {
-    /* unbounded: use a very large cap. Callers must size their buffer. */
-    return cvm_vfmt(str, (size_t)0x7fffffff, fmt, ap);
-}
-
-/* Format from a caller-provided argument buffer (the i386 vararg block: each
- * argument occupies a 4-byte slot, 8 bytes for a 64-bit/double value, in
- * declaration order, little-endian). This is the varargs-free path a cart
- * uses to print without C ellipsis. */
-int cvm_vsnprintf_buf(char *str, size_t size, const char *fmt, const void *args) {
-    va_list ap = (va_list)(void *)(uintptr_t)args;   /* va_list is char* here */
-    return cvm_vfmt(str, size, fmt, ap);
-}
-
-/* Console output: format into a stack buffer and hand the bytes to cron_log.
- * Long output is truncated to the buffer (1 KiB). */
-static __attribute__((noinline))
-int _cvm_log_vfmt(const char *fmt, va_list ap) {
-    char buf[1024];
-    int n = cvm_vfmt(buf, sizeof buf, fmt, ap);
-    int emit = n < (int)sizeof buf ? n : (int)sizeof buf - 1;
-    cron_log(buf, emit);
-    return n;
-}
-
-int vprintf(const char *fmt, va_list ap) {
-    return _cvm_log_vfmt(fmt, ap);
-}
-
-int vfprintf(FILE *stream, const char *fmt, va_list ap) {
-    if (!stream) return _cvm_log_vfmt(fmt, ap);   /* std stream -> console */
-    /* RAM-FS file: format then write the bytes into the file. */
-    char buf[1024];
-    va_list ap2; va_copy(ap2, ap);
-    int n = cvm_vfmt(buf, sizeof buf, fmt, ap);
-    if (n < 0) { va_end(ap2); return n; }
-    if ((size_t)n < sizeof buf) {
-        fwrite(buf, 1, (size_t)n, stream);
-    } else {                                       /* didn't fit: size exactly */
-        char *big = (char *)malloc((size_t)n + 1);
-        if (big) { cvm_vfmt(big, (size_t)n + 1, fmt, ap2); fwrite(big, 1, (size_t)n, stream); free(big); }
-    }
-    va_end(ap2);
-    return n;
-}
-
-/* ---- variadic wrappers (printf family; va_start works on this target) -- */
-
-int snprintf(char *str, size_t size, const char *fmt, ...) {
-    va_list ap;
-    va_start(ap, fmt);
-    int r = cvm_vfmt(str, size, fmt, ap);
-    va_end(ap);
-    return r;
-}
-
-int sprintf(char *str, const char *fmt, ...) {
-    va_list ap;
-    va_start(ap, fmt);
-    int r = cvm_vfmt(str, (size_t)0x7fffffff, fmt, ap);
-    va_end(ap);
-    return r;
-}
-
-int printf(const char *fmt, ...) {
-    va_list ap;
-    va_start(ap, fmt);
-    int r = _cvm_log_vfmt(fmt, ap);
-    va_end(ap);
-    return r;
-}
-
-int fprintf(FILE *stream, const char *fmt, ...) {
-    va_list ap;
-    va_start(ap, fmt);
-    int r = vfprintf(stream, fmt, ap);
-    va_end(ap);
-    return r;
-}
-
-int puts(const char *s) {
-    size_t n = strlen(s);
-    cron_log(s, (int32_t)n);
-    cron_log("\n", 1);
-    return (int)n + 1;
-}
-
-int fputs(const char *s, FILE *stream) {
-    size_t n = strlen(s);
-    if (stream) fwrite(s, 1, n, stream);     /* RAM-FS file */
-    else        cron_log(s, (int32_t)n);     /* std -> console */
-    return (int)n;
-}
-
-int fputc(int c, FILE *stream) {
-    char ch = (char)c;
-    if (stream) fwrite(&ch, 1, 1, stream);   /* RAM-FS file */
-    else        cron_log(&ch, 1);            /* std -> console */
-    return (unsigned char)c;
-}
-
-int putchar(int c) {
-    char ch = (char)c;
-    cron_log(&ch, 1);
-    return (unsigned char)c;
-}
-
-/* ---- minimal sscanf (DOOM uses it for config parsing) ------------------ */
-/* Supports the conversions the kept sources need: %d %i %u %x %s %c and
- * whitespace skipping. No width except %s reads a token. Returns the number
- * of fields assigned. Float conversions are not supported (would need f64).
- *
- * Like the printf family, the variadic `sscanf` is guarded out (it needs
- * va_start). The va_list core `cvm_vsscanf` is always available and a cart
- * can call it with a manually built pointer-argument buffer. */
-int cvm_vsscanf(const char *str, const char *fmt, va_list ap) {
-    int assigned = 0;
-    const char *s = str;
-
-    while (*fmt) {
-        if (isspace((unsigned char)*fmt)) {
-            fmt++;
-            while (isspace((unsigned char)*s)) s++;
-            continue;
-        }
-        if (*fmt != '%') {
-            if (*s != *fmt) break;
-            s++; fmt++;
-            continue;
-        }
-        fmt++;  /* past % */
-        int suppress = 0;
-        if (*fmt == '*') { suppress = 1; fmt++; }
-        /* ignore width/length modifiers */
-        while (isdigit((unsigned char)*fmt)) fmt++;
-        while (*fmt == 'l' || *fmt == 'h' || *fmt == 'z' || *fmt == 'L') fmt++;
-
-        char conv = *fmt;
-        if (conv == '\0') break;
-        fmt++;
-
-        if (conv == 'c') {
-            if (*s == '\0') break;
-            if (!suppress) { char *p = va_arg(ap, char *); *p = *s; assigned++; }
-            s++;
-            continue;
-        }
-
-        while (isspace((unsigned char)*s)) s++;
-        if (*s == '\0') break;
-
-        if (conv == 's') {
-            char *out = suppress ? NULL : va_arg(ap, char *);
-            int wrote = 0;
-            while (*s && !isspace((unsigned char)*s)) {
-                if (out) *out++ = *s;
-                s++; wrote++;
-            }
-            if (out) *out = '\0';
-            if (!suppress && wrote) assigned++;
-            else if (!wrote) break;
-            continue;
-        }
-
-        if (conv == 'd' || conv == 'i' || conv == 'u' ||
-            conv == 'x' || conv == 'X' || conv == 'o') {
-            char *end;
-            int base = (conv == 'x' || conv == 'X') ? 16 :
-                       (conv == 'o') ? 8 :
-                       (conv == 'i') ? 0 : 10;
-            const char *before = s;
-            if (conv == 'u') {
-                unsigned long v = strtoul(s, &end, base);
-                if (end == before) break;
-                if (!suppress) { unsigned *p = va_arg(ap, unsigned *); *p = (unsigned)v; assigned++; }
-            } else {
-                long v = strtol(s, &end, base);
-                if (end == before) break;
-                if (!suppress) { int *p = va_arg(ap, int *); *p = (int)v; assigned++; }
-            }
-            s = end;
-            continue;
-        }
-
-        if (conv == '%') {
-            if (*s != '%') break;
-            s++;
-            continue;
-        }
-        /* unsupported conversion: stop */
-        break;
-    }
-
-    return assigned;
-}
-
-int sscanf(const char *str, const char *fmt, ...) {
-    va_list ap;
-    va_start(ap, fmt);
-    int r = cvm_vsscanf(str, fmt, ap);
-    va_end(ap);
-    return r;
-}
-
-/* ---- RAM filesystem ("memory card") ----------------------------------- */
-/* The console has no host filesystem, but a cart gets a small PERSISTED blob
- * (the save region — see <cronopio.h> cron_save_*). We expose it to ports as a
- * tiny in-RAM filesystem: every fopen()'d file lives in a heap buffer here,
- * loaded from the save blob on first use and serialised back on close. This is
- * how a ported engine's file-based saves (DOOM's savegames) persist with no
- * engine changes. Bounded by cron_save_size(); NOT a general filesystem.
- * Bundled read-only assets still come from the cartridge ROM (cron_rom).
- *
- * std streams (stdin/stdout/stderr) are NULL; the printf family + a NULL stream
- * route to cron_log. A non-NULL FILE* is always a RAM-FS handle. */
-
+/* ---- the persisted RAM filesystem (backs fopen-ed files) --------------- */
 #define RAMFS_MAX    24
 #define RAMFS_NAME   96
 #define RAMFS_MAGIC  0x31534643u   /* 'C','F','S','1' little-endian */
 
 typedef struct { int used; char name[RAMFS_NAME]; uint8_t *data; uint32_t len, cap; } ramfile_t;
 static ramfile_t        g_fs[RAMFS_MAX];
-static struct _CVM_FILE g_fh[RAMFS_MAX];
-static int              g_fh_used[RAMFS_MAX];
 
 /* A cart can expose its baked --rom blob (cron_rom) as a single read-only file
  * at a chosen path: fopen(path, "r"/"rb") then returns a ROM-backed handle whose
@@ -1075,290 +463,97 @@ static int ramfile_grow(ramfile_t *f, uint32_t need) {
     return 0;
 }
 
-/* ---- stdio over the RAM filesystem ------------------------------------- */
-
-FILE *fopen(const char *path, const char *mode) {
-    if (!path || !mode) { errno = ENOENT; return NULL; }
-    ramfs_load();
-    int write = (mode[0] == 'w' || mode[0] == 'a');
-
-    /* ROM-backed file: opened read-only, served from cron_rom(). */
-    if (!write && g_rom_path && cron_rom_size() > 0 &&
-        cvm_path_eq(path, g_rom_path)) {
-        for (int i = 0; i < RAMFS_MAX; ++i) if (!g_fh_used[i]) {
-            g_fh_used[i] = 1;
-            g_fh[i].slot = -1; g_fh[i].pos = 0; g_fh[i].writing = 0;
-            g_fh[i].eofbit = 0; g_fh[i].is_rom = 1;
-            return &g_fh[i];
-        }
-        errno = ENOENT; return NULL;
-    }
-
-    int slot  = ramfs_find(path);
-    if (!write && slot < 0) { errno = ENOENT; return NULL; }
-    if (write) {
-        if (slot < 0) slot = ramfs_create(path);
-        if (slot < 0) { errno = ENOENT; return NULL; }
-        if (mode[0] == 'w') g_fs[slot].len = 0;   /* truncate */
-    }
-    int h = -1;
-    for (int i = 0; i < RAMFS_MAX; ++i) if (!g_fh_used[i]) { h = i; break; }
-    if (h < 0) { errno = ENOENT; return NULL; }
-    g_fh_used[h] = 1;
-    g_fh[h].slot    = slot;
-    g_fh[h].pos     = (mode[0] == 'a') ? g_fs[slot].len : 0;
-    g_fh[h].writing = write;
-    g_fh[h].eofbit  = 0;
-    g_fh[h].is_rom  = 0;
-    return &g_fh[h];
-}
-
-int fclose(FILE *stream) {
-    if (!stream) return 0;            /* std stream */
-    if (stream->writing) ramfs_flush();
-    int h = (int)(stream - g_fh);
-    if (h >= 0 && h < RAMFS_MAX) g_fh_used[h] = 0;
-    return 0;
-}
-
-size_t fread(void *ptr, size_t size, size_t nmemb, FILE *stream) {
-    if (!stream || !ptr || size == 0 || nmemb == 0) return 0;
-    size_t want = size * nmemb;
-    const uint8_t *src;
-    uint32_t len;
-    if (stream->is_rom) { src = cron_rom(); len = cron_rom_size(); }
-    else { ramfile_t *f = &g_fs[stream->slot]; src = f->data; len = f->len; }
-    uint32_t avail = (stream->pos < len) ? (len - stream->pos) : 0;
-    size_t got = want < avail ? want : avail;
-    if (got) { memcpy(ptr, src + stream->pos, got); stream->pos += (uint32_t)got; }
-    if (got < want) stream->eofbit = 1;
-    return got / size;
-}
-
-size_t fwrite(const void *ptr, size_t size, size_t nmemb, FILE *stream) {
-    if (size == 0 || nmemb == 0) return 0;
-    size_t total = size * nmemb;
-    if (!stream) { cron_log((const char *)ptr, (int32_t)total); return nmemb; }  /* std */
-    ramfile_t *f = &g_fs[stream->slot];
-    if (ramfile_grow(f, stream->pos + (uint32_t)total) != 0) return 0;
-    memcpy(f->data + stream->pos, ptr, total);
-    stream->pos += (uint32_t)total;
-    if (stream->pos > f->len) f->len = stream->pos;
-    return nmemb;
-}
-
-int fseek(FILE *stream, long offset, int whence) {
-    if (!stream) return -1;
-    long len = stream->is_rom ? (long)cron_rom_size() : (long)g_fs[stream->slot].len;
-    long base = (whence == SEEK_CUR) ? (long)stream->pos
-              : (whence == SEEK_END) ? len : 0;
-    long np = base + offset;
-    if (np < 0) return -1;
-    stream->pos = (uint32_t)np;
-    stream->eofbit = 0;
-    return 0;
-}
-
-long ftell(FILE *stream) { return stream ? (long)stream->pos : -1; }
-
-int fflush(FILE *stream) {
-    if (stream && stream->writing) ramfs_flush();
-    return 0;
-}
-
-char *fgets(char *s, int size, FILE *stream) {
-    if (!stream || !s || size <= 0) return NULL;
-    const uint8_t *data; uint32_t len;
-    if (stream->is_rom) { data = cron_rom(); len = cron_rom_size(); }
-    else { ramfile_t *f = &g_fs[stream->slot]; data = f->data; len = f->len; }
-    int i = 0;
-    while (i < size - 1 && stream->pos < len) {
-        char c = (char)data[stream->pos++];
-        s[i++] = c;
-        if (c == '\n') break;
-    }
-    if (i == 0) { stream->eofbit = 1; return NULL; }
-    s[i] = '\0';
-    return s;
-}
-
-int fgetc(FILE *stream) {
-    if (!stream) return EOF;
-    const uint8_t *data; uint32_t len;
-    if (stream->is_rom) { data = cron_rom(); len = cron_rom_size(); }
-    else { ramfile_t *f = &g_fs[stream->slot]; data = f->data; len = f->len; }
-    if (stream->pos >= len) { stream->eofbit = 1; return EOF; }
-    return (int)data[stream->pos++];
-}
-
-int ungetc(int c, FILE *stream) {
-    if (!stream || c == EOF || stream->pos == 0) return EOF;
-    stream->pos--;
-    stream->eofbit = 0;
-    return c;
-}
-
-/* ---- POSIX fd-level I/O (open/read/write/close/lseek) ---------------------
- * A thin fd table over fopen(): fds 0/1/2 are the standard streams (writes go
- * to cron_log), fd N>=CVM_FD_BASE maps to a RAM-FS FILE*. Surfaced by ports
- * that use low-level fd I/O (e.g. Quake's console log via open/write). */
+/* ---- POSIX fd backend over the RAM-FS + ROM ---------------------------- *
+ * tinystdio's FILE layer (fopen/fread/fwrite/fseek/...) sits on these. Each fd
+ * is a {RAM-FS slot OR ROM, position, write-flag} descriptor. fd 0/1/2 are the
+ * standard streams: writes to 1/2 go to cron_log, reads return EOF. O_* values
+ * match picolibc's (sdk/include/fcntl.h), so the flags tinystdio passes are
+ * interpreted correctly. close() of a written file flushes the RAM-FS. */
 #define CVM_FD_BASE 3
 #define CVM_FD_MAX  16
-static FILE *g_fd[CVM_FD_MAX];
+typedef struct { int used; int slot; uint32_t pos; int writing; int is_rom; } cvm_fd_t;
+static cvm_fd_t g_fd[CVM_FD_MAX];
 
-static FILE *fd_file(int fd) {
+static cvm_fd_t *fd_get(int fd) {
     int i = fd - CVM_FD_BASE;
-    if (i < 0 || i >= CVM_FD_MAX) return NULL;
-    return g_fd[i];
+    if (i < 0 || i >= CVM_FD_MAX || !g_fd[i].used) return NULL;
+    return &g_fd[i];
 }
 
 int open(const char *path, int flags, ...) {
-    const char *mode;
-    if (flags & O_WRONLY)    mode = (flags & O_APPEND) ? "ab" : "wb";
-    else if (flags & O_RDWR) mode = (flags & O_APPEND) ? "a+b"
-                                  : ((flags & O_TRUNC) ? "w+b" : "r+b");
-    else                     mode = "rb";
-    FILE *fp = fopen(path, mode);
-    if (!fp) return -1;
-    for (int i = 0; i < CVM_FD_MAX; i++) {
-        if (!g_fd[i]) { g_fd[i] = fp; return CVM_FD_BASE + i; }
+    if (!path) { errno = ENOENT; return -1; }
+    ramfs_load();
+    int writing = (flags & (O_WRONLY | O_RDWR)) != 0;
+
+    /* ROM-backed read-only file (the baked --rom blob at the mounted path). */
+    if (!writing && g_rom_path && cron_rom_size() > 0 && cvm_path_eq(path, g_rom_path)) {
+        for (int i = 0; i < CVM_FD_MAX; ++i) if (!g_fd[i].used) {
+            g_fd[i].used = 1; g_fd[i].slot = -1; g_fd[i].pos = 0;
+            g_fd[i].writing = 0; g_fd[i].is_rom = 1;
+            return CVM_FD_BASE + i;
+        }
+        errno = ENOENT; return -1;
     }
-    fclose(fp);
-    return -1;
+
+    int slot = ramfs_find(path);
+    if (!writing && slot < 0) { errno = ENOENT; return -1; }
+    if (writing) {
+        if (slot < 0) slot = ramfs_create(path);
+        if (slot < 0) { errno = ENOENT; return -1; }
+        if (flags & O_TRUNC) g_fs[slot].len = 0;
+    }
+    for (int i = 0; i < CVM_FD_MAX; ++i) if (!g_fd[i].used) {
+        g_fd[i].used = 1; g_fd[i].slot = slot;
+        g_fd[i].pos = ((flags & O_APPEND) && slot >= 0) ? g_fs[slot].len : 0;
+        g_fd[i].writing = writing; g_fd[i].is_rom = 0;
+        return CVM_FD_BASE + i;
+    }
+    errno = ENOENT; return -1;
+}
+
+ssize_t read(int fd, void *buf, size_t count) {
+    cvm_fd_t *d = fd_get(fd);
+    if (!d) return (fd >= 0 && fd <= 2) ? 0 : -1;   /* stdin -> EOF */
+    const uint8_t *src; uint32_t len;
+    if (d->is_rom) { src = cron_rom(); len = cron_rom_size(); }
+    else { ramfile_t *f = &g_fs[d->slot]; src = f->data; len = f->len; }
+    uint32_t avail = (d->pos < len) ? (len - d->pos) : 0;
+    size_t got = count < avail ? count : avail;
+    if (got) { memcpy(buf, src + d->pos, got); d->pos += (uint32_t)got; }
+    return (ssize_t)got;
 }
 
 ssize_t write(int fd, const void *buf, size_t count) {
     if (fd == 1 || fd == 2) { cron_log((const char *)buf, (int32_t)count); return (ssize_t)count; }
-    FILE *fp = fd_file(fd);
-    if (!fp) return -1;
-    return (ssize_t)fwrite(buf, 1, count, fp);
-}
-
-ssize_t read(int fd, void *buf, size_t count) {
-    FILE *fp = fd_file(fd);
-    if (!fp) return -1;
-    return (ssize_t)fread(buf, 1, count, fp);
-}
-
-int close(int fd) {
-    int i = fd - CVM_FD_BASE;
-    if (i < 0 || i >= CVM_FD_MAX || !g_fd[i]) return -1;
-    fclose(g_fd[i]);
-    g_fd[i] = NULL;
-    return 0;
+    cvm_fd_t *d = fd_get(fd);
+    if (!d || d->is_rom) return -1;
+    ramfile_t *f = &g_fs[d->slot];
+    if (ramfile_grow(f, d->pos + (uint32_t)count) != 0) { errno = ENOMEM; return -1; }
+    memcpy(f->data + d->pos, buf, count);
+    d->pos += (uint32_t)count;
+    if (d->pos > f->len) f->len = d->pos;
+    return (ssize_t)count;
 }
 
 off_t lseek(int fd, off_t offset, int whence) {
-    FILE *fp = fd_file(fd);
-    if (!fp) return -1;
-    if (fseek(fp, (long)offset, whence) != 0) return -1;
-    return (off_t)ftell(fp);
+    cvm_fd_t *d = fd_get(fd);
+    if (!d) return -1;
+    off_t len = d->is_rom ? (off_t)cron_rom_size() : (off_t)g_fs[d->slot].len;
+    off_t base = (whence == SEEK_CUR) ? (off_t)d->pos : (whence == SEEK_END) ? len : 0;
+    off_t np = base + offset;
+    if (np < 0) { errno = 22; return -1; }   /* EINVAL */
+    d->pos = (uint32_t)np;
+    return np;
 }
 
-/* fscanf over a RAM-FS file. Supports the directives ports actually use for
- * text config: whitespace (skips a run), literal chars, %% , and
- * %[*][width](s|d|i|u|x|[set]) — enough for crispy's "%79s %99[^\n]" config
- * lines. Reads via fgetc/ungetc; no console input (NULL stream -> EOF). */
-/* Whitespace test. Written as an explicit range so clang does NOT fold the
- * c==' '||c=='\t'||... chain into a 24-bit bitmask test (the ws codes span
- * 9..32 = 24 values), which the translator rejects (no i24). 9..13 = \t\n\v\f\r,
- * 32 = space. */
-static int sf_isws(int c) { return (c >= 9 && c <= 13) || c == 32; }
-
-int fscanf(FILE *stream, const char *fmt, ...) {
-    if (!stream) return -1;
-    va_list ap; va_start(ap, fmt);
-    int assigned = 0, saw_input = 0, c;
-    const char *f = fmt;
-    while (*f) {
-        if (sf_isws(*f)) {                       /* whitespace: skip input ws */
-            do { c = fgetc(stream); } while (sf_isws(c));
-            if (c != EOF) ungetc(c, stream);
-            f++;
-            continue;
-        }
-        if (*f != '%') {                         /* literal: must match */
-            c = fgetc(stream);
-            if (c != (unsigned char)*f) { if (c != EOF) ungetc(c, stream); goto done; }
-            saw_input = 1; f++;
-            continue;
-        }
-        /* conversion */
-        f++;
-        int suppress = 0; if (*f == '*') { suppress = 1; f++; }
-        int width = 0, have_w = 0;
-        while (*f >= '0' && *f <= '9') { width = width*10 + (*f - '0'); have_w = 1; f++; }
-        char conv = *f ? *f++ : 0;
-
-        if (conv == '%') {
-            c = fgetc(stream);
-            if (c != '%') { if (c != EOF) ungetc(c, stream); goto done; }
-            saw_input = 1; continue;
-        }
-        if (conv == 'd' || conv == 'i' || conv == 'u' || conv == 'x') {
-            do { c = fgetc(stream); } while (sf_isws(c));
-            int base = (conv == 'x') ? 16 : 10, neg = 0, got = 0;
-            long val = 0;
-            if ((c == '-' || c == '+') && conv != 'u' && conv != 'x') { neg = (c=='-'); c = fgetc(stream); }
-            int n = 0;
-            while (c != EOF && (!have_w || n < width)) {
-                int d;
-                if (c >= '0' && c <= '9') d = c - '0';
-                else if (base == 16 && c >= 'a' && c <= 'f') d = c - 'a' + 10;
-                else if (base == 16 && c >= 'A' && c <= 'F') d = c - 'A' + 10;
-                else break;
-                val = val*base + d; got = 1; saw_input = 1; n++;
-                c = fgetc(stream);
-            }
-            if (c != EOF) ungetc(c, stream);
-            if (!got) goto done;
-            if (neg) val = -val;
-            if (!suppress) { *va_arg(ap, int*) = (int)val; assigned++; }
-            continue;
-        }
-        if (conv == 's' || conv == '[') {
-            int negate = 0;
-            const char *set0 = 0, *set1 = 0;
-            if (conv == '[') {
-                if (*f == '^') { negate = 1; f++; }
-                set0 = f;
-                while (*f && *f != ']') f++;
-                set1 = f;
-                if (*f == ']') f++;
-            } else {
-                do { c = fgetc(stream); } while (sf_isws(c));   /* %s skips leading ws */
-                goto have_first;          /* c already holds the first char */
-            }
-            c = fgetc(stream);
-        have_first:;
-            char *out = suppress ? 0 : va_arg(ap, char*);
-            int n = 0;
-            for (;;) {
-                if (c == EOF) break;
-                int match;
-                if (conv == 's') match = !sf_isws(c);
-                else { int in = 0; for (const char *s = set0; s < set1; ++s) if ((unsigned char)*s == c) { in = 1; break; } match = negate ? !in : in; }
-                if (!match || (have_w && n >= width)) break;
-                if (out) out[n] = (char)c;
-                n++; saw_input = 1;
-                c = fgetc(stream);
-            }
-            if (c != EOF) ungetc(c, stream);
-            if (out) out[n] = '\0';
-            if (conv == 's' && n == 0) goto done;   /* %s requires >=1 char */
-            if (!suppress) assigned++;
-            continue;
-        }
-        goto done;   /* unsupported conversion */
-    }
-done:
-    va_end(ap);
-    if (assigned == 0 && !saw_input) return -1;   /* EOF / nothing matched */
-    return assigned;
+int close(int fd) {
+    cvm_fd_t *d = fd_get(fd);
+    if (!d) return -1;
+    if (d->writing) ramfs_flush();
+    d->used = 0;
+    return 0;
 }
 
-/* ---- <locale.h>: fixed "C" locale ------------------------------------- */
-#include <locale.h>
 char *setlocale(int category, const char *locale) {
     (void)category; (void)locale;
     return (char *)"C";
@@ -1380,12 +575,6 @@ struct lconv *localeconv(void) {
     return &lc;
 }
 
-int feof(FILE *stream) { return stream ? stream->eofbit : 1; }
-
-int ferror(FILE *stream) { (void)stream; return 0; }
-
-void clearerr(FILE *stream) { if (stream) stream->eofbit = 0; }
-
 int remove(const char *path) {
     ramfs_load();
     int s = ramfs_find(path);
@@ -1405,15 +594,6 @@ int rename(const char *oldp, const char *newp) {
     snprintf(g_fs[s].name, RAMFS_NAME, "%s", newp);
     ramfs_flush();
     return 0;
-}
-
-void perror(const char *s) {
-    if (s && *s) {
-        cron_log(s, (int32_t)strlen(s));
-        cron_log(": ", 2);
-    }
-    static const char e[] = "error\n";
-    cron_log(e, (int32_t)sizeof(e) - 1);
 }
 
 /* ===================== dirent.h — directory enumeration ================ */
@@ -1575,12 +755,12 @@ int rmdir(const char *path) { (void)path; return 0; }
 /* fstat over the fd table: an open fd is always a regular file (RAM-FS or
  * ROM-backed); report its size. */
 int fstat(int fd, struct stat *buf) {
-    FILE *fp = fd_file(fd);
-    if (!fp || !buf) { errno = EBADF; return -1; }
+    cvm_fd_t *d = fd_get(fd);
+    if (!d || !buf) { errno = EBADF; return -1; }
     memset(buf, 0, sizeof *buf);
     buf->st_mode = S_IFREG | 0644;
-    buf->st_size = fp->is_rom ? (off_t)cron_rom_size()
-                              : (off_t)g_fs[fp->slot].len;
+    buf->st_size = d->is_rom ? (off_t)cron_rom_size()
+                             : (off_t)g_fs[d->slot].len;
     return 0;
 }
 
