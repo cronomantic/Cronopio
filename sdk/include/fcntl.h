@@ -1,5 +1,5 @@
 /* <fcntl.h> — Cronopio SDK freestanding libc. POSIX file-control: open() and
- * its flags, layered (in cvm_libc.c) over the RAM filesystem that backs fopen.
+ * its flags, layered (in cron_sys.c) over the RAM filesystem that backs fopen.
  * Surfaced by ports that use low-level fd I/O (e.g. Quake's console log). */
 #ifndef CVM_LIBC_FCNTL_H
 #define CVM_LIBC_FCNTL_H

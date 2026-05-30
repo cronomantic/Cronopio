@@ -4,7 +4,7 @@
  * but a port that reads bundled assets should point its reader at the
  * cartridge ROM (cron_rom) rather than fopen(). The string-formatting family
  * (snprintf/vsnprintf/sscanf) is the part that carries real weight and is
- * fully implemented in sdk/lib/cvm_libc.c. printf-to-console routes to
+ * fully implemented in sdk/lib/cron_sys.c. printf-to-console routes to
  * cron_log. */
 #ifndef CVM_LIBC_STDIO_H
 #define CVM_LIBC_STDIO_H
@@ -28,7 +28,7 @@ extern FILE *stderr;
 
 /* TOOLCHAIN NOTE: the CronoVM translator lowers varargs (va_start), so the
  * variadic entry points below (printf/fprintf/sprintf/snprintf/sscanf) are
- * defined for real in cvm_libc.c and translate fine. The va_list cores and the
+ * defined for real in cron_sys.c and translate fine. The va_list cores and the
  * varargs-free cvm_vsnprintf_buf() remain available too, for code that prefers
  * to format from a prebuilt argument block. */
 int   printf(const char *fmt, ...);

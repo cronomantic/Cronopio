@@ -1,7 +1,7 @@
 /* <strings.h> — Cronopio SDK freestanding libc. See ctype.h for rationale.
  *
  * doomtype.h includes this for the BSD case-insensitive comparisons. They are
- * implemented in cvm_libc.c (shared with <string.h>); this is a thin re-decl.*/
+ * implemented in cron_sys.c (shared with <string.h>); this is a thin re-decl.*/
 #ifndef CVM_LIBC_STRINGS_H
 #define CVM_LIBC_STRINGS_H
 

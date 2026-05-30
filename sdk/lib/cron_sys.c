@@ -1,11 +1,20 @@
-/* cvm_libc.c — Cronopio SDK freestanding C library implementation.
+/* cron_sys.c — Cronopio SDK machine port + platform layer (NOT a libc).
  *
- * Carts run on CronoVM with no host OS and no hosted libc. This file
- * implements the slice of the C standard library that ports written for a
- * hosted environment (DOOM / Crispy Doom) need to compile and run: the
- * <ctype.h>, <string.h>, <stdlib.h> and <stdio.h> declarations shipped in
- * sdk/include, plus the small POSIX-ish stubs (<sys/stat.h>, <time.h>,
- * <unistd.h>) those ports include.
+ * picolibc is the C library now (see runtime/lib/build_picolibc.sh +
+ * libc-libcxx-decision): it owns the standard string/mem/ctype/stdlib/numeric
+ * surface AND the canonical malloc/free/calloc/realloc. This file is what an
+ * embedder must supply on top of picolibc — the "machine port" — PLUS the
+ * Cronopio-specific functions that are not part of any standard libc:
+ *   - the machine port picolibc needs: `errno` and `sbrk` (over the cron heap);
+ *   - process control over cron syscalls: exit / abort / atexit / assert;
+ *   - stdio + the FS layer (printf/fopen/dirent/stat/...) routed to cron
+ *     syscalls and the cart ROM — DEFERRED to picolibc tinystdio in a later
+ *     phase; for now the cron-routed implementations stay here;
+ *   - the handful of classifiers/strings picolibc's CURATED build does not
+ *     compile (isblank/iscntrl/isprint/isgraph/ispunct, strcasecmp/strncasecmp/
+ *     strndup, strerror, strtod/atof, srand/rand, getenv);
+ *   - the Cronopio-specific TUNED allocator under cron_* names (cron_malloc &c.)
+ *     — kept available; the canonical allocator is picolibc's (see below).
  *
  * Hard target constraints (see the SDK docs):
  *   - The translator (cvm-translate) REJECTS i64 and f64 SSA values. So this
@@ -21,10 +30,10 @@
  * comment — it closes the comment early. So we say "mem and str", not the
  * glob form.
  *
- * Memory comes from cvm_alloc (the cart heap); console output and termination
- * route through the Cronopio syscalls in <cronopio.h>. There is no filesystem:
- * FILE I/O is stubbed so ports link, but bundled assets must be read from the
- * cartridge ROM (cron_rom), not fopen(). */
+ * The cart must link picolibc.bc alongside this file (the cart build scripts do
+ * so). Console output and termination route through the Cronopio syscalls in
+ * <cronopio.h>. There is no host filesystem: FILE I/O is stubbed/RAM-backed so
+ * ports link, but bundled assets are read from the cartridge ROM (cron_rom). */
 
 #include <stddef.h>
 #include <stdint.h>
@@ -53,105 +62,24 @@ int cvm_vsnprintf_buf(char *str, size_t size, const char *fmt, const void *args)
 int cvm_vsscanf(const char *str, const char *fmt, va_list ap);
 
 /* ============================== ctype.h ================================= */
-/* ASCII / C locale. All trivial range checks; no tables to keep them small. */
-
-int isdigit(int c)  { return c >= '0' && c <= '9'; }
-int isupper(int c)  { return c >= 'A' && c <= 'Z'; }
-int islower(int c)  { return c >= 'a' && c <= 'z'; }
-int isalpha(int c)  { return isupper(c) || islower(c); }
-int isalnum(int c)  { return isalpha(c) || isdigit(c); }
-int isspace(int c)  { return c == ' ' || (c >= '\t' && c <= '\r'); }
+/* picolibc owns isdigit/isupper/islower/isalpha/isalnum/isspace/isxdigit +
+ * tolower/toupper (its ctype table). Only the classifiers picolibc's curated
+ * build does NOT compile are kept here (trivial ASCII/C-locale range checks).
+ * isalnum below resolves to picolibc's. */
 int isblank(int c)  { return c == ' ' || c == '\t'; }
 int iscntrl(int c)  { return (c >= 0 && c < 0x20) || c == 0x7f; }
 int isprint(int c)  { return c >= 0x20 && c < 0x7f; }
 int isgraph(int c)  { return c > 0x20 && c < 0x7f; }
-int isxdigit(int c) { return isdigit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'); }
 int ispunct(int c)  { return isgraph(c) && !isalnum(c); }
 
-int tolower(int c)  { return isupper(c) ? c + ('a' - 'A') : c; }
-int toupper(int c)  { return islower(c) ? c - ('a' - 'A') : c; }
-
 /* ============================== string.h =============================== */
-
-/* __builtin_mem* lower to the llvm.mem* intrinsics in the -emit-llvm IR, which
- * cvm-translate turns into the VM's single-instruction MEMCPY/MEMSET/MEMMOVE
- * opcodes (one host memcpy/memset per call) instead of a per-byte CVM loop.
- * The builtin is the compiler primitive, not a call to these symbols, so there
- * is no self-recursion. Profiling DOOM showed the byte-loop memset at ~44% of
- * all in-level interpreter instructions; this collapses it to ~1 op/call. */
-void *memcpy(void *dst, const void *src, size_t n) {
-    __builtin_memcpy(dst, src, n);
-    return dst;
-}
-
-void *memmove(void *dst, const void *src, size_t n) {
-    __builtin_memmove(dst, src, n);
-    return dst;
-}
-
-void *memset(void *dst, int c, size_t n) {
-    __builtin_memset(dst, c, n);
-    return dst;
-}
-
-int memcmp(const void *a, const void *b, size_t n) {
-    const unsigned char *pa = (const unsigned char *)a;
-    const unsigned char *pb = (const unsigned char *)b;
-    while (n--) {
-        if (*pa != *pb) return (int)*pa - (int)*pb;
-        pa++; pb++;
-    }
-    return 0;
-}
-
-void *memchr(const void *s, int c, size_t n) {
-    const unsigned char *p = (const unsigned char *)s;
-    unsigned char v = (unsigned char)c;
-    while (n--) {
-        if (*p == v) return (void *)p;
-        p++;
-    }
-    return NULL;
-}
-
-char *strcpy(char *dst, const char *src) {
-    char *d = dst;
-    while ((*d++ = *src++) != '\0') { }
-    return dst;
-}
-
-char *strncpy(char *dst, const char *src, size_t n) {
-    char *d = dst;
-    while (n && (*d = *src) != '\0') { d++; src++; n--; }
-    while (n--) *d++ = '\0';
-    return dst;
-}
-
-char *strcat(char *dst, const char *src) {
-    char *d = dst;
-    while (*d) d++;
-    while ((*d++ = *src++) != '\0') { }
-    return dst;
-}
-
-char *strncat(char *dst, const char *src, size_t n) {
-    char *d = dst;
-    while (*d) d++;
-    while (n && (*src != '\0')) { *d++ = *src++; n--; }
-    *d = '\0';
-    return dst;
-}
-
-int strcmp(const char *a, const char *b) {
-    while (*a && (*a == *b)) { a++; b++; }
-    return (int)(unsigned char)*a - (int)(unsigned char)*b;
-}
-
-int strncmp(const char *a, const char *b, size_t n) {
-    while (n && *a && (*a == *b)) { a++; b++; n--; }
-    if (n == 0) return 0;
-    return (int)(unsigned char)*a - (int)(unsigned char)*b;
-}
+/* picolibc owns the standard mem and str surface: memcpy/memmove/memset/memcmp/
+ * memchr, strcpy/strncpy/strcat/strncat, strcmp/strncmp, strlen/strnlen,
+ * strchr/strrchr/strstr/strdup, strtok/strspn/strcspn/strpbrk. (picolibc's
+ * mem routines map to the same llvm.mem* intrinsics, so they still become the
+ * VM's single-op MEMCPY/MEMSET/MEMMOVE — no perf loss vs the old byte loops.)
+ * Only the functions picolibc's curated build does NOT compile stay here; their
+ * calls to tolower/strnlen/malloc/memcpy resolve to picolibc. */
 
 int strcasecmp(const char *a, const char *b) {
     int ca, cb;
@@ -172,67 +100,6 @@ int strncasecmp(const char *a, const char *b, size_t n) {
     return 0;
 }
 
-size_t strlen(const char *s) {
-    /* Walk a separate pointer and counter, incrementing both INSIDE the loop
-     * body. A counter returned straight from a loop-header phi (`while(s[n])
-     * n++; return n;`) is miscomputed by one by the current translator; this
-     * body-increment form translates correctly. */
-    size_t n = 0;
-    const char *p = s;
-    while (*p != '\0') {
-        p++;
-        n++;
-    }
-    return n;
-}
-
-size_t strnlen(const char *s, size_t n) {
-    /* Body-increment counter (see strlen) to avoid the translator's
-     * header-phi off-by-one. */
-    size_t i = 0;
-    const char *p = s;
-    while (i < n && *p != '\0') { p++; i++; }
-    return i;
-}
-
-char *strchr(const char *s, int c) {
-    char ch = (char)c;
-    for (;;) {
-        if (*s == ch) return (char *)s;
-        if (*s == '\0') return NULL;
-        s++;
-    }
-}
-
-char *strrchr(const char *s, int c) {
-    char ch = (char)c;
-    const char *last = NULL;
-    for (;;) {
-        if (*s == ch) last = s;
-        if (*s == '\0') break;
-        s++;
-    }
-    return (char *)last;
-}
-
-char *strstr(const char *haystack, const char *needle) {
-    if (*needle == '\0') return (char *)haystack;
-    for (; *haystack; haystack++) {
-        const char *h = haystack;
-        const char *n = needle;
-        while (*h && *n && (*h == *n)) { h++; n++; }
-        if (*n == '\0') return (char *)haystack;
-    }
-    return NULL;
-}
-
-char *strdup(const char *s) {
-    size_t n = strlen(s) + 1;
-    char *p = (char *)malloc(n);
-    if (p) memcpy(p, s, n);
-    return p;
-}
-
 char *strndup(const char *s, size_t n) {
     size_t len = strnlen(s, n);
     char *p = (char *)malloc(len + 1);
@@ -243,69 +110,42 @@ char *strndup(const char *s, size_t n) {
     return p;
 }
 
-/* file-local saveptr — strtok is not reentrant by design. */
-static char *_cvm_strtok_save;
-
-char *strtok(char *str, const char *delim) {
-    char *s = str ? str : _cvm_strtok_save;
-    if (!s) return NULL;
-    /* skip leading delimiters */
-    while (*s && strchr(delim, *s)) s++;
-    if (*s == '\0') { _cvm_strtok_save = NULL; return NULL; }
-    char *tok = s;
-    /* find end of token */
-    while (*s && !strchr(delim, *s)) s++;
-    if (*s) { *s = '\0'; _cvm_strtok_save = s + 1; }
-    else    { _cvm_strtok_save = NULL; }
-    return tok;
-}
-
-size_t strspn(const char *s, const char *accept) {
-    const char *p = s;
-    while (*p && strchr(accept, *p)) p++;
-    return (size_t)(p - s);
-}
-
-size_t strcspn(const char *s, const char *reject) {
-    const char *p = s;
-    while (*p && !strchr(reject, *p)) p++;
-    return (size_t)(p - s);
-}
-
-char *strpbrk(const char *s, const char *accept) {
-    for (; *s; ++s)
-        if (strchr(accept, *s)) return (char *)s;
-    return NULL;
-}
-
 char *strerror(int errnum) {
     (void)errnum;
     return (char *)"error";
 }
 
 /* ============================== stdlib.h =============================== */
+/* picolibc owns abs/labs, atoi/atol, strtol/strtoul, qsort/bsearch. The malloc
+ * family is CONFIGURABLE per cart (see the two modes below): by default it is
+ * picolibc's (sbrk-backed); with -DCRON_LIBC_TUNED_MALLOC it is the Cronopio
+ * tuned O(1)-free allocator. Kept here regardless: strtod/atof + rand/getenv/
+ * exit/abort/assert (not in picolibc's curated build). */
 
-void *malloc(size_t size) {
-    if (size == 0) size = 1;
-    return cvm_malloc((int)size);
-}
-
-/* noinline so clang cannot pattern-match the (multiply + overflow check) idiom
- * and lower it to llvm.umul.with.overflow.i32, which the translator does not
- * implement. The division test runs in a separate function from the multiply.*/
+/* The array-size overflow helper is shared by both allocator configs below. */
 static __attribute__((noinline))
 size_t _cvm_array_bytes(size_t nmemb, size_t size) {
-    /* Multiply first, then verify by dividing the product back. Checking
-     * AFTER the multiply (rather than guarding with MAX/size before it) avoids
-     * the (guard + multiply) idiom that clang folds to
-     * llvm.umul.with.overflow.i32 — an intrinsic the translator cannot lower.
-     * `total` is volatile so the multiply genuinely happens before the check.*/
+    /* Multiply, then verify by dividing the product back (overflow check). */
     volatile size_t total = nmemb * size;
     size_t t = total;
     if (size != 0 && (t / size) != nmemb) return 0;   /* overflowed */
     return t;
 }
 
+#ifdef CRON_LIBC_TUNED_MALLOC
+/* ---- CANONICAL malloc = the Cronopio TUNED allocator -------------------- *
+ * This cart selects the tuned O(1)-free allocator (cvm_alloc.h) as the standard
+ * malloc family. picolibc.bc MUST be built WITHOUT its own malloc family
+ * (build_picolibc.sh --no-malloc) so there is exactly ONE allocator on the cron
+ * heap and no sbrk is needed (the allocator carves cvm_sys_heap_* directly).
+ * Chosen for UQM: its 10559-entry ZIP content mount keeps many small blocks
+ * live, where the tuned O(1) free beats picolibc nano-malloc's O(n) free
+ * (~1s vs ~9s mount). See docs/architecture.md for the full trade-off. */
+void *malloc(size_t size) {
+    if (size == 0) size = 1;
+    return cvm_malloc((int)size);
+}
+void free(void *ptr) { cvm_free(ptr); }
 void *calloc(size_t nmemb, size_t size) {
     if ((nmemb != 0) && (size != 0)) {
         size_t total = _cvm_array_bytes(nmemb, size);
@@ -314,22 +154,14 @@ void *calloc(size_t nmemb, size_t size) {
         if (p) memset(p, 0, total);
         return p;
     }
-    /* zero element count or size: allocate a 1-byte block per convention */
-    return malloc(1);
+    return malloc(1);                       /* zero count/size: 1-byte block */
 }
-
-void free(void *ptr) {
-    cvm_free(ptr);
-}
-
 void *realloc(void *ptr, size_t size) {
     if (ptr == NULL) return malloc(size);
     if (size == 0) { free(ptr); return NULL; }
-
     /* payload size of the existing block: (whole-block-size & ~1) - header */
     int32_t whole = *(int32_t *)((char *)ptr - 4) & ~1;
     size_t oldsz = (size_t)(whole - 4);
-
     void *np = malloc(size);
     if (!np) return NULL;
     size_t copy = oldsz < size ? oldsz : size;
@@ -337,85 +169,73 @@ void *realloc(void *ptr, size_t size) {
     free(ptr);
     return np;
 }
-
-int abs(int n)   { return n < 0 ? -n : n; }
-long labs(long n) { return n < 0 ? -n : n; }
-
-/* Shared integer parser. Reads into an unsigned 32-bit accumulator and tracks
- * sign separately, so no 64-bit math is required. Saturates on overflow. */
-static __attribute__((noinline))
-unsigned long _cvm_strtox(const char *s, char **endptr, int base,
-                          int *negout, int sgned) {
-    const char *start = s;
-    int neg = 0;
-    unsigned long acc = 0;
-    int any = 0;
-    unsigned long cutoff;
-
-    while (isspace((unsigned char)*s)) s++;
-
-    if (*s == '+' || *s == '-') { neg = (*s == '-'); s++; }
-
-    if ((base == 0 || base == 16) && s[0] == '0' &&
-        (s[1] == 'x' || s[1] == 'X')) {
-        s += 2;
-        base = 16;
-    } else if (base == 0 && s[0] == '0') {
-        base = 8;
-    } else if (base == 0) {
-        base = 10;
+#else
+/* ---- CANONICAL malloc = picolibc's (sbrk-backed); tuned stays as cron_* -- *
+ * Default config. picolibc.bc owns malloc/free/calloc/realloc; this file
+ * supplies the sole OS hook picolibc needs — sbrk over the cron heap. The tuned
+ * allocator is kept available under cron_* names (dormant; DCE'd unless the cart
+ * calls it). A cart must NOT mix cron_malloc with picolibc malloc — both draw
+ * from the same cron heap (cvm_sys_heap_*). To make the tuned allocator the
+ * cart's standard malloc instead, build with -DCRON_LIBC_TUNED_MALLOC (and
+ * picolibc.bc with --no-malloc), as build_uqm.sh does. */
+/* sbrk: picolibc's malloc grows the heap by calling sbrk(). Hand out the region
+ * reserved by --heap-reserve (located by cvm_sys_heap_start/size) linearly;
+ * (void*)-1 + errno=ENOMEM on exhaustion is the contract picolibc expects. */
+void *sbrk(ptrdiff_t incr);
+void *sbrk(ptrdiff_t incr) {
+    static int   inited = 0;
+    static char *base, *brk, *end;
+    if (!inited) {
+        base = brk = (char *)(size_t)cvm_sys_heap_start();
+        end  = base + (size_t)cvm_sys_heap_size();
+        inited = 1;
     }
-
-    /* saturation limits */
-    if (sgned)
-        cutoff = neg ? 0x80000000ul : 0x7ffffffful;
-    else
-        cutoff = 0xfffffffful;
-
-    for (;;) {
-        int c = (unsigned char)*s;
-        int d;
-        if (c >= '0' && c <= '9') d = c - '0';
-        else if (c >= 'a' && c <= 'z') d = c - 'a' + 10;
-        else if (c >= 'A' && c <= 'Z') d = c - 'A' + 10;
-        else break;
-        if (d >= base) break;
-
-        /* overflow check: acc*base + d > cutoff ? */
-        if (acc > (cutoff - (unsigned long)d) / (unsigned long)base) {
-            acc = cutoff;       /* saturate; keep scanning the digits */
-        } else {
-            acc = acc * (unsigned long)base + (unsigned long)d;
-        }
-        any = 1;
-        s++;
+    char *prev = brk;
+    if (incr > 0) {
+        if ((size_t)(end - brk) < (size_t)incr) { errno = ENOMEM; return (void *)-1; }
+    } else if (incr < 0) {
+        if ((size_t)(brk - base) < (size_t)(-incr)) { errno = ENOMEM; return (void *)-1; }
     }
-
-    if (endptr) *endptr = (char *)(any ? s : start);
-    if (negout) *negout = neg;
-    return acc;
+    brk += incr;
+    return prev;
 }
 
-long strtol(const char *s, char **endptr, int base) {
-    int neg = 0;
-    unsigned long v = _cvm_strtox(s, endptr, base, &neg, 1);
-    if (neg) {
-        if (v >= 0x80000000ul) return (long)0x80000000ul; /* INT_MIN */
-        return -(long)v;
+void *cron_malloc(size_t size);
+void  cron_free(void *ptr);
+void *cron_calloc(size_t nmemb, size_t size);
+void *cron_realloc(void *ptr, size_t size);
+
+void *cron_malloc(size_t size) {
+    if (size == 0) size = 1;
+    return cvm_malloc((int)size);
+}
+void *cron_calloc(size_t nmemb, size_t size) {
+    if ((nmemb != 0) && (size != 0)) {
+        size_t total = _cvm_array_bytes(nmemb, size);
+        if (total == 0) return NULL;        /* overflow */
+        void *p = cron_malloc(total);
+        if (p) memset(p, 0, total);
+        return p;
     }
-    if (v > 0x7ffffffful) return (long)0x7ffffffful;
-    return (long)v;
+    return cron_malloc(1);                   /* zero count/size: 1-byte block */
 }
-
-unsigned long strtoul(const char *s, char **endptr, int base) {
-    int neg = 0;
-    unsigned long v = _cvm_strtox(s, endptr, base, &neg, 0);
-    if (neg) return (unsigned long)(-(long)v);
-    return v;
+void cron_free(void *ptr) { cvm_free(ptr); }
+void *cron_realloc(void *ptr, size_t size) {
+    if (ptr == NULL) return cron_malloc(size);
+    if (size == 0) { cron_free(ptr); return NULL; }
+    int32_t whole = *(int32_t *)((char *)ptr - 4) & ~1;
+    size_t oldsz = (size_t)(whole - 4);
+    void *np = cron_malloc(size);
+    if (!np) return NULL;
+    size_t copy = oldsz < size ? oldsz : size;
+    memcpy(np, ptr, copy);
+    cron_free(ptr);
+    return np;
 }
+#endif  /* CRON_LIBC_TUNED_MALLOC */
 
-int atoi(const char *s) { return (int)strtol(s, NULL, 10); }
-long atol(const char *s) { return strtol(s, NULL, 10); }
+/* strtol/strtoul/atoi/atol are picolibc's now (its versions set errno on
+ * overflow rather than saturating — the standard behaviour). */
 
 /* atof / strtod return `double` (f64) by their C signatures. The translator
  * REJECTS any function whose return type is f64 — even a trivial `return 0`,
@@ -472,63 +292,7 @@ double strtod(const char *nptr, char **endptr) {
 double atof(const char *nptr) { return strtod(nptr, NULL); }
 #endif
 
-/* qsort — simple recursive quicksort with a median-of-first pivot, falling
- * back to insertion sort for small partitions. Element swap is byte-wise so
- * any element size works. The partition loop is noinline (register budget). */
-static void _cvm_swap(char *a, char *b, size_t size) {
-    while (size--) {
-        char t = *a;
-        *a++ = *b;
-        *b++ = t;
-    }
-}
-
-static __attribute__((noinline))
-void _cvm_qsort(char *base, size_t n, size_t size,
-                int (*cmp)(const void *, const void *)) {
-    while (n > 1) {
-        if (n < 8) {
-            /* insertion sort for small runs */
-            for (size_t i = 1; i < n; i++) {
-                size_t j = i;
-                while (j > 0 &&
-                       cmp(base + (j - 1) * size, base + j * size) > 0) {
-                    _cvm_swap(base + (j - 1) * size, base + j * size, size);
-                    j--;
-                }
-            }
-            return;
-        }
-        /* partition around the first element */
-        char *pivot = base;
-        size_t i = 1, j = n;
-        for (;;) {
-            while (i < n && cmp(base + i * size, pivot) < 0) i++;
-            do { j--; } while (j > 0 && cmp(base + j * size, pivot) > 0);
-            if (i >= j) break;
-            _cvm_swap(base + i * size, base + j * size, size);
-            i++;
-        }
-        _cvm_swap(pivot, base + j * size, size);
-        /* recurse on the smaller half, loop on the larger (bounded depth) */
-        size_t left = j;
-        size_t right = n - j - 1;
-        if (left < right) {
-            _cvm_qsort(base, left, size, cmp);
-            base = base + (j + 1) * size;
-            n = right;
-        } else {
-            _cvm_qsort(base + (j + 1) * size, right, size, cmp);
-            n = left;
-        }
-    }
-}
-
-void qsort(void *base, size_t nmemb, size_t size,
-           int (*compar)(const void *, const void *)) {
-    if (nmemb < 2 || size == 0) return;
-    _cvm_qsort((char *)base, nmemb, size, compar);
-}
+/* qsort + bsearch are picolibc's now. */
 
 /* rand / srand — 32-bit xorshift. RAND_MAX is 0x7fffffff, so we mask the top
  * bit off. */

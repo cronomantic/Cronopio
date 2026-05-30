@@ -2,7 +2,7 @@
  *
  * DOOM's m_misc.h includes this for struct stat / stat() / mkdir() / the
  * S_IS* macros. There is no filesystem: stat() always fails and mkdir() is a
- * no-op (implemented in cvm_libc.c). The struct carries only the fields the
+ * no-op (implemented in cron_sys.c). The struct carries only the fields the
  * port reads (st_mode, st_size, st_mtime); all are 32-bit. */
 #ifndef CVM_LIBC_SYS_STAT_H
 #define CVM_LIBC_SYS_STAT_H

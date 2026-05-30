@@ -1,5 +1,5 @@
 /* <string.h> — Cronopio SDK freestanding libc. See ctype.h for the rationale.
- * Implemented in sdk/lib/cvm_libc.c (the mem and str routines DOOM uses). */
+ * Implemented in sdk/lib/cron_sys.c (the mem and str routines DOOM uses). */
 #ifndef CVM_LIBC_STRING_H
 #define CVM_LIBC_STRING_H
 

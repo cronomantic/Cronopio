@@ -1,6 +1,6 @@
 /* <stdlib.h> — Cronopio SDK freestanding libc. See ctype.h for the rationale.
  * malloc family is backed by cvm_alloc (the cart heap); exit/abort route to
- * cron_exit. Implemented in sdk/lib/cvm_libc.c. */
+ * cron_exit. Implemented in sdk/lib/cron_sys.c. */
 #ifndef CVM_LIBC_STDLIB_H
 #define CVM_LIBC_STDLIB_H
 

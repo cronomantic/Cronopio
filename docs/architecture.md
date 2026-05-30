@@ -66,11 +66,28 @@ ordinary C pointers after a one-call `cron_resolve_video()` at
 startup. Bundled assets (a DOOM WAD, etc.) are baked in with
 `cvm-cc --rom=FILE` and read through `cron_rom()` / `cron_rom_size()`,
 which front the CronoVM `cvm_sys_rom_*` built-ins.
-`sdk/lib/cvm_libc.c` is the bundled freestanding libc; its block
-primitives (`memset`/`memcpy`/`memmove`) are written with
-`__builtin_mem*` so the translator lowers them to CronoVM's single
-`MEMSET`/`MEMCPY`/`MEMMOVE` opcodes (one host call each) rather than a
-per-byte VM loop — a large win for memory-heavy carts.
+The C library is **picolibc** (`runtime/lib/build_picolibc.sh` →
+`picolibc.bc`, a CronoVM-side artifact): it owns the standard string /
+mem / ctype / stdlib / numeric surface. `sdk/lib/cron_sys.c` is the
+Cronopio **machine port + platform layer** that a cart links alongside
+picolibc — `errno`, process control (`exit`/`abort`/`assert`), the
+stdio + FS layer routed to cron syscalls and the cart ROM, and the few
+classifiers/strings picolibc's curated build omits. (picolibc's `mem*`
+still lower to CronoVM's single `MEMSET`/`MEMCPY`/`MEMMOVE` opcodes, so
+the memory-heavy-cart win is unchanged.)
+
+**Allocator (per-cart choice).** By default the canonical
+`malloc`/`free`/`calloc`/`realloc` are **picolibc's**, backed by a
+`sbrk` over the cron heap in `cron_sys.c`. picolibc's nano-malloc has an
+**O(n) free** (its free-list insert walks the list), which is slow for
+workloads that keep many small blocks live — e.g. UQM's 10559-entry ZIP
+content mount (~9 s). Building a cart with **`-DCRON_LIBC_TUNED_MALLOC`**
+(and `picolibc.bc` via `build_picolibc.sh --no-malloc`) instead makes
+the Cronopio **tuned O(1)-free allocator** (`cvm_alloc.h`) the canonical
+`malloc` — recovering UQM's mount to ~1 s. The two allocators both draw
+from the same cron heap, so a cart uses exactly one: UQM selects the
+tuned one (`build_uqm.sh`), DOOM/Quake keep picolibc's. The unused
+family is dead-code-eliminated.
 
 `sdk/include/coro.h` exposes the cart-facing API for cooperative
 coroutines on top of CronoVM's `CVM_OP_CORO_SWAP` opcode:
@@ -78,7 +95,7 @@ coroutines on top of CronoVM's `CVM_OP_CORO_SWAP` opcode:
 `cron_coro_swap(from, to)` atomically saves the calling context into
 `from` and resumes `to`; `cron_coro_yield(self)` is a convenience that
 swaps back to whoever last resumed `self`. The default trampoline
-`__cron_coro_trampoline` lives in `sdk/lib/cvm_libc.c` and runs
+`__cron_coro_trampoline` lives in `sdk/lib/cron_sys.c` and runs
 `self->fn(self->arg)` on the new stack, transitioning the coroutine's
 status FRESH → RUNNING → DEAD before swapping back to the resumer. This
 is what the cronopio-uqm port uses to retrofit Ur-Quan Masters'

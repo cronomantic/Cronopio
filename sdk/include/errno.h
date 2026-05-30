@@ -1,6 +1,6 @@
 /* <errno.h> — Cronopio SDK freestanding libc. See ctype.h for the rationale.
  *
- * A single global `errno` lives in cvm_libc.c. The E* values are arbitrary
+ * A single global `errno` lives in cron_sys.c. The E* values are arbitrary
  * small ints — there is no host OS to define a canonical set; ports only
  * compare against these macros and print strerror() (which returns "error").*/
 #ifndef CVM_LIBC_ERRNO_H

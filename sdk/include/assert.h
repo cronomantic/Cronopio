@@ -15,7 +15,7 @@
 
 #else
 
-/* Helper lives in cvm_libc.c so the per-call-site code stays tiny. */
+/* Helper lives in cron_sys.c so the per-call-site code stays tiny. */
 void _cvm_assert_fail(const char *expr, const char *file, int line);
 
 #define assert(expr) \

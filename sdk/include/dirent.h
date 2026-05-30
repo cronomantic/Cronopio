@@ -1,5 +1,5 @@
 /* <dirent.h> — Cronopio SDK freestanding libc. Directory enumeration over the
- * in-RAM filesystem (see cvm_libc.c). The RAM-FS stores files by full path;
+ * in-RAM filesystem (see cron_sys.c). The RAM-FS stores files by full path;
  * opendir()/readdir() synthesise directory listings by extracting the
  * immediate child component of every stored path (and the ROM-backed file)
  * under the queried directory. Surfaced by ports that scan directories — e.g.
