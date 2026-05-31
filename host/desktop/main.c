@@ -16,6 +16,7 @@
 
 #include "console.h"
 #include "cron_ogg.h"
+#include "cron_module.h"
 #include "syscalls.h"
 #include "cvm.h"
 #include "hostcfg.h"
@@ -341,6 +342,7 @@ static int app_load_cart(void* ud, const char* path) {
      * then re-establish the host hooks console_init clears. */
     cron_synth_destroy(a->console->synth);
     cron_ogg_destroy(a->console->ogg);
+    cron_module_destroy(a->console->module);
     cronopio_save_free(a->console);   /* free the outgoing cart's save buffer */
     cronopio_console_init(a->console);
     a->console->boot_ms    = SDL_GetTicks();
@@ -639,6 +641,7 @@ int main(int argc, char** argv) {
     if (app.audio_dev) SDL_CloseAudioDevice(app.audio_dev);
     cron_synth_destroy(console.synth);
     cron_ogg_destroy(console.ogg);
+    cron_module_destroy(console.module);
     SDL_DestroyTexture(tex);
     SDL_DestroyRenderer(ren);
     SDL_DestroyWindow(win);

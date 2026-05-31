@@ -6,6 +6,7 @@ add_library(cronopio_common STATIC
     common/apu.c
     common/midisynth.c
     common/cron_ogg.c
+    common/cron_module.c
     external/stb_vorbis.c
     common/bios_sf2.c
     common/input.c
@@ -22,6 +23,22 @@ set_source_files_properties(external/stb_vorbis.c PROPERTIES COMPILE_OPTIONS "-w
 # music synth used by common/midisynth.c.
 target_include_directories(cronopio_common PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/../external/TinySoundFont")
+
+# libxmp (submodule under external/) — the tracker-module music player
+# (MOD/S3M/XM/IT) used by common/cron_module.c. Build only the static lib.
+# libxmp targets C90 but uses `static inline`, which the strict -std=c90 the
+# project default (CMAKE_C_EXTENSIONS OFF) selects does NOT accept; enable GNU
+# extensions for libxmp's scope so it builds as -std=gnu90 (its intended mode).
+set(BUILD_SHARED OFF CACHE BOOL "" FORCE)
+set(BUILD_LITE   OFF CACHE BOOL "" FORCE)
+set(LIBXMP_PIC   OFF CACHE BOOL "" FORCE)
+set(CMAKE_C_EXTENSIONS ON)
+add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../external/libxmp"
+                 "${CMAKE_BINARY_DIR}/libxmp" EXCLUDE_FROM_ALL)
+set(CMAKE_C_EXTENSIONS OFF)
+target_include_directories(cronopio_common PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/../external/libxmp/include")
+target_link_libraries(cronopio_common PRIVATE xmp_static)
 
 if(TARGET cvm)
     target_link_libraries(cronopio_common PUBLIC cvm)

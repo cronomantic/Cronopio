@@ -109,6 +109,30 @@ replaces the previous. Near-zero VM cost (the host does the decoding).
 and publishes it through an atomic slot; the audio thread adopts it and is the
 only thread that touches the (non-thread-safe) decoder or frees a track.
 
+## Layer 5 — music: tracker modules (sequenced sample music)
+
+For sequenced module music — MOD/S3M/XM/IT and the wider tracker family (e.g.
+the base Ur-Quan Masters soundtrack ships as `.mod`) — the cart hands the host
+the bytes of a module file and the host loads + renders it with **libxmp**
+(vendored submodule under `external/libxmp`, MIT), at `CRON_AUDIO_HZ` with
+cubic-spline interpolation and the lowpass DSP, mixed under the SFX. The cart
+reads the module from its own ROM/pak and passes the buffer; libxmp parses it
+into its own context, so the cart may free it immediately. One module plays at
+a time; a new `cron_module_play` replaces the previous. Near-zero VM cost (the
+host does the synthesis). This is the sample-sequenced sibling of Layer 4's
+streamed Ogg — a cart picks whichever its content provides (UQM uses `.mod` for
+the base soundtrack and the optional 3DO pack's `.ogg` via Layer 4).
+
+| Name                 | Signature                                  | Notes |
+|----------------------|--------------------------------------------|-------|
+| `cron_module_play`     | `void(const void* mod, i32 len, i32 loop)` | Load + play `len` bytes of a module; `loop`!=0 repeats forever |
+| `cron_module_stop`   | `void()`                                   | Stop and release the current module |
+| `cron_module_volume` | `void(i32 vol)`                            | Module music volume 0..256 (Q8) |
+
+**Threading.** Same SPSC discipline as Layer 4: the cart thread opens the module
+(libxmp context) and publishes it through an atomic slot; the audio thread
+adopts it and is the only thread that touches the (non-thread-safe) player.
+
 ## Syscall range
 
 `0x200–0x2FF` — extended audio. `0x200` block = Layer 1 (samples + voices)

@@ -93,6 +93,9 @@ extern void     cvm_sys_cron_midi_volume    (int32_t vol);
 extern void     cvm_sys_cron_ogg            (const void* ogg, int32_t len, int32_t loop);
 extern void     cvm_sys_cron_ogg_stop       (void);
 extern void     cvm_sys_cron_ogg_volume     (int32_t vol);
+extern void     cvm_sys_cron_module         (const void* mod, int32_t len, int32_t loop);
+extern void     cvm_sys_cron_module_stop    (void);
+extern void     cvm_sys_cron_module_volume  (int32_t vol);
 
 extern uint32_t cvm_sys_cron_pad         (int32_t player);
 extern uint32_t cvm_sys_cron_pad_pressed (int32_t player);
@@ -254,6 +257,17 @@ static inline void     cron_midi_volume    (int32_t vol)                  { cvm_
 static inline void     cron_ogg_play       (const void* ogg, int32_t len, int32_t loop) { cvm_sys_cron_ogg(ogg, len, loop); }
 static inline void     cron_ogg_stop       (void)                         { cvm_sys_cron_ogg_stop(); }
 static inline void     cron_ogg_volume     (int32_t vol)                  { cvm_sys_cron_ogg_volume(vol); }
+
+/* Tracker-module music (host-native, decoded with libxmp): MOD / S3M / XM / IT
+ * and the wider tracker family. Hand the host the bytes of a module file (e.g.
+ * a track read from the cart's ROM/pak); it loads + renders it at CRON_AUDIO_HZ
+ * with cubic-spline interpolation and the lowpass DSP, and mixes it under the
+ * SFX. loop != 0 repeats forever. Near-zero VM cost. cron_module_volume is
+ * 0..256 (Q8). One module plays at a time; a new cron_module_play replaces it.
+ * (For streamed Ogg Vorbis music use cron_ogg_* above.) */
+static inline void     cron_module_play    (const void* mod, int32_t len, int32_t loop) { cvm_sys_cron_module(mod, len, loop); }
+static inline void     cron_module_stop    (void)                         { cvm_sys_cron_module_stop(); }
+static inline void     cron_module_volume  (int32_t vol)                  { cvm_sys_cron_module_volume(vol); }
 
 static inline uint32_t cron_pad         (int32_t p)                       { return cvm_sys_cron_pad(p); }
 static inline uint32_t cron_pad_pressed (int32_t p)                       { return cvm_sys_cron_pad_pressed(p); }

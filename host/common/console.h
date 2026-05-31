@@ -225,6 +225,7 @@ typedef struct {
     int                master_vol_q8;            /* 0..256 */
     void*              synth;                     /* MIDI+SoundFont synth (midisynth.c, opaque cron_synth*) */
     void*              ogg;                     /* streaming OGG music (cron_ogg.c, opaque) */
+    void*              module;                   /* tracker-module music — MOD/S3M/XM/IT (cron_module.c, opaque) */
 
     /* Streaming PCM ring (16-bit stereo). head written by the cart thread
      * (cron_stream), tail by the audio thread (mixer); single-producer /

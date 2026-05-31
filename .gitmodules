@@ -4,3 +4,6 @@
 [submodule "external/TinySoundFont"]
 	path = external/TinySoundFont
 	url = https://github.com/schellingb/TinySoundFont
+[submodule "external/libxmp"]
+	path = external/libxmp
+	url = https://github.com/libxmp/libxmp

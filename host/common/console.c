@@ -1,5 +1,6 @@
 #include "console.h"
 #include "cron_ogg.h"
+#include "cron_module.h"
 
 #include <string.h>
 #include <stdlib.h>
@@ -56,6 +57,9 @@ void cronopio_console_init(cronopio_console_t* c) {
 
     /* Streaming OGG music decoder (host-side; a cart hands it ogg bytes). */
     c->ogg = cron_ogg_create();
+
+    /* Tracker-module music player (host-side libxmp; a cart hands it module bytes). */
+    c->module = cron_module_create();
 }
 
 void cronopio_console_begin_frame(cronopio_console_t* c) {
@@ -159,6 +163,11 @@ void cronopio_console_mix(cronopio_console_t* c, int16_t* dst, int frames) {
     int music_frames = frames > CRONOPIO_STREAM_FRAMES ? CRONOPIO_STREAM_FRAMES : frames;
     if (c->ogg) cron_ogg_render(c->ogg, music_buf, music_frames);
 
+    /* Render the tracker-module music block (libxmp, audio thread). */
+    static int16_t module_buf[CRONOPIO_STREAM_FRAMES * 2];
+    int module_frames = frames > CRONOPIO_STREAM_FRAMES ? CRONOPIO_STREAM_FRAMES : frames;
+    if (c->module) cron_module_render(c->module, module_buf, module_frames);
+
     for (int i = 0; i < frames; ++i) {
         int32_t mix_l = 0, mix_r = 0;
         for (int vi = 0; vi < CRONOPIO_AUDIO_CHANS; ++vi) {
@@ -235,6 +244,12 @@ void cronopio_console_mix(cronopio_console_t* c, int16_t* dst, int frames) {
         if (c->ogg && i < music_frames) {
             mix_l += music_buf[i * 2];
             mix_r += music_buf[i * 2 + 1];
+        }
+
+        /* Add the tracker-module music for this frame. */
+        if (c->module && i < module_frames) {
+            mix_l += module_buf[i * 2];
+            mix_r += module_buf[i * 2 + 1];
         }
 
         mix_l = (mix_l * c->master_vol_q8) >> 8;

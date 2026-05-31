@@ -14,6 +14,7 @@
 
 #include "cvm.h"
 #include "cron_ogg.h"
+#include "cron_module.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -656,6 +657,29 @@ static int sys_ogg_volume(struct cvm_image *img, int32_t *r, void *ud) {
     return 0;
 }
 
+/* --- tracker-module music — MOD/S3M/XM/IT (cron_module.c, libxmp) ------- */
+
+static int sys_module(struct cvm_image *img, int32_t *r, void *ud) {
+    ctx_t *x = (ctx_t*)ud;
+    uint32_t off = (uint32_t)r[0], len = (uint32_t)r[1];
+    if (!x->c->heap || (uint64_t)off + len > img->mem_size) { r[0] = -1; return 0; }
+    cron_module_play(x->c->module, x->c->heap + off, (int)len, (int)r[2]);
+    r[0] = 0;
+    return 0;
+}
+static int sys_module_stop(struct cvm_image *img, int32_t *r, void *ud) {
+    (void)img;
+    cron_module_stop(((ctx_t*)ud)->c->module);
+    r[0] = 0;
+    return 0;
+}
+static int sys_module_volume(struct cvm_image *img, int32_t *r, void *ud) {
+    (void)img;
+    cron_module_set_volume(((ctx_t*)ud)->c->module, (int)r[0]);
+    r[0] = 0;
+    return 0;
+}
+
 /* ------ input ----------------------------------------------------------- */
 
 static int sys_pad(struct cvm_image *img, int32_t *r, void *ud) {
@@ -830,6 +854,9 @@ static const entry_t kSyscalls[] = {
     { "cvm_sys_cron_ogg",          sys_ogg          },
     { "cvm_sys_cron_ogg_stop",     sys_ogg_stop     },
     { "cvm_sys_cron_ogg_volume",   sys_ogg_volume   },
+    { "cvm_sys_cron_module",        sys_module        },
+    { "cvm_sys_cron_module_stop",   sys_module_stop   },
+    { "cvm_sys_cron_module_volume", sys_module_volume },
     /* input */
     { "cvm_sys_cron_pad",          sys_pad          },
     { "cvm_sys_cron_pad_pressed",  sys_pad_pressed  },
