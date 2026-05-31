@@ -96,14 +96,14 @@ soundtrack — the cart hands the host the bytes of an Ogg Vorbis file and the
 host decodes it (vendored stb_vorbis, public domain), resamples to the output
 rate (`CRON_AUDIO_HZ`, 22050), and mixes it under the SFX. The cart reads the
 `.ogg` from its own ROM/pak and passes the buffer; the host copies it, so the
-cart may free it immediately. One track plays at a time; a new `cron_music`
+cart may free it immediately. One track plays at a time; a new `cron_ogg_play`
 replaces the previous. Near-zero VM cost (the host does the decoding).
 
 | Name                 | Signature                                  | Notes |
 |----------------------|--------------------------------------------|-------|
-| `cron_music`         | `void(const void* ogg, i32 len, i32 loop)` | Decode + play `len` bytes of ogg; `loop`!=0 restarts at the end |
-| `cron_music_stop`    | `void()`                                   | Stop and release the current track |
-| `cron_music_volume`  | `void(i32 vol)`                            | Music volume 0..256 (Q8) |
+| `cron_ogg_play`         | `void(const void* ogg, i32 len, i32 loop)` | Decode + play `len` bytes of ogg; `loop`!=0 restarts at the end |
+| `cron_ogg_stop`    | `void()`                                   | Stop and release the current track |
+| `cron_ogg_volume`  | `void(i32 vol)`                            | Music volume 0..256 (Q8) |
 
 **Threading.** Same SPSC discipline as the synth: the cart thread opens a track
 and publishes it through an atomic slot; the audio thread adopts it and is the
@@ -140,4 +140,4 @@ uses MUS→MIDI→`cron_midi_send` (host synth) for music and DMX `DS*` →
 `cron_sample_u8`+`cron_pcm` for SFX — both working, with `cron_pcm_params`
 applying DOOM's per-tic 3D repositioning (volume/pan) to in-flight sounds. The
 Quake port streams its mixed SFX through `cron_stream` and plays its recorded
-soundtrack as `.ogg` through `cron_music` (Layer 4).
+soundtrack as `.ogg` through `cron_ogg_play` (Layer 4).

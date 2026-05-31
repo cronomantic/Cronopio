@@ -5,7 +5,7 @@ add_library(cronopio_common STATIC
     common/poly.c
     common/apu.c
     common/midisynth.c
-    common/cron_music.c
+    common/cron_ogg.c
     external/stb_vorbis.c
     common/bios_sf2.c
     common/input.c

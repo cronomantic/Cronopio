@@ -115,9 +115,9 @@ track plays at a time. See [audio.md](audio.md) Layer 4.
 
 | Name                       | Signature                              | Notes                                          |
 |----------------------------|----------------------------------------|------------------------------------------------|
-| `cvm_sys_cron_music`       | `void(const void* ogg, i32 len, i32 loop)` | Decode + play `len` bytes of ogg; loop!=0 restarts; replaces any current track |
-| `cvm_sys_cron_music_stop`  | `void()`                               | Stop and release the current track             |
-| `cvm_sys_cron_music_volume`| `void(i32 vol)`                        | Music volume 0..256 (Q8)                       |
+| `cvm_sys_cron_ogg`       | `void(const void* ogg, i32 len, i32 loop)` | Decode + play `len` bytes of ogg; loop!=0 restarts; replaces any current track |
+| `cvm_sys_cron_ogg_stop`  | `void()`                               | Stop and release the current track             |
+| `cvm_sys_cron_ogg_volume`| `void(i32 vol)`                        | Music volume 0..256 (Q8)                       |
 
 ## Input
 

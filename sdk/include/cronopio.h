@@ -90,9 +90,9 @@ extern void     cvm_sys_cron_midi_soundfont (int32_t handle);
 extern void     cvm_sys_cron_midi_send      (int32_t status, int32_t d1, int32_t d2);
 extern void     cvm_sys_cron_midi_reset     (void);
 extern void     cvm_sys_cron_midi_volume    (int32_t vol);
-extern void     cvm_sys_cron_music          (const void* ogg, int32_t len, int32_t loop);
-extern void     cvm_sys_cron_music_stop     (void);
-extern void     cvm_sys_cron_music_volume   (int32_t vol);
+extern void     cvm_sys_cron_ogg            (const void* ogg, int32_t len, int32_t loop);
+extern void     cvm_sys_cron_ogg_stop       (void);
+extern void     cvm_sys_cron_ogg_volume     (int32_t vol);
 
 extern uint32_t cvm_sys_cron_pad         (int32_t player);
 extern uint32_t cvm_sys_cron_pad_pressed (int32_t player);
@@ -248,11 +248,12 @@ static inline void     cron_midi_volume    (int32_t vol)                  { cvm_
 /* Streaming OGG music (host-native, decoded with stb_vorbis). Hand the host the
  * bytes of an Ogg Vorbis file (e.g. a track read from the cart's ROM/pak); it
  * copies them, decodes + resamples to CRON_AUDIO_HZ, and mixes the music under
- * the SFX. loop != 0 restarts at the end. Near-zero VM cost. cron_music_volume
- * is 0..256 (Q8). One track plays at a time; a new cron_music replaces it. */
-static inline void     cron_music          (const void* ogg, int32_t len, int32_t loop) { cvm_sys_cron_music(ogg, len, loop); }
-static inline void     cron_music_stop     (void)                         { cvm_sys_cron_music_stop(); }
-static inline void     cron_music_volume   (int32_t vol)                  { cvm_sys_cron_music_volume(vol); }
+ * the SFX. loop != 0 restarts at the end. Near-zero VM cost. cron_ogg_volume
+ * is 0..256 (Q8). One track plays at a time; a new cron_ogg_play replaces it.
+ * (For tracker-module music — MOD/S3M/XM/IT — use cron_module_* below.) */
+static inline void     cron_ogg_play       (const void* ogg, int32_t len, int32_t loop) { cvm_sys_cron_ogg(ogg, len, loop); }
+static inline void     cron_ogg_stop       (void)                         { cvm_sys_cron_ogg_stop(); }
+static inline void     cron_ogg_volume     (int32_t vol)                  { cvm_sys_cron_ogg_volume(vol); }
 
 static inline uint32_t cron_pad         (int32_t p)                       { return cvm_sys_cron_pad(p); }
 static inline uint32_t cron_pad_pressed (int32_t p)                       { return cvm_sys_cron_pad_pressed(p); }

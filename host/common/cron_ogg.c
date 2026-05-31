@@ -1,4 +1,4 @@
-/* cron_music.c — host-side streaming OGG music (see cron_music.h).
+/* cron_ogg.c — host-side streaming OGG music (see cron_ogg.h).
  *
  * Threading: the cart thread prepares a fully-opened track and publishes it
  * through an atomic `pending` slot; the audio thread adopts it at the start of
@@ -6,7 +6,7 @@
  * published track). Stop/volume are atomics. This keeps the decoder, which is
  * not thread-safe, touched by exactly one thread at a time. */
 
-#include "cron_music.h"
+#include "cron_ogg.h"
 #include "console.h"     /* CRONOPIO_AUDIO_HZ */
 
 #include <stdatomic.h>
@@ -52,7 +52,7 @@ static void track_free(track_t* tk) {
     free(tk);
 }
 
-void* cron_music_create(void) {
+void* cron_ogg_create(void) {
     music_t* m = (music_t*)calloc(1, sizeof(*m));
     if (m) {
         atomic_store(&m->pending, (track_t*)NULL);
@@ -62,7 +62,7 @@ void* cron_music_create(void) {
     return m;
 }
 
-void cron_music_destroy(void* mm) {
+void cron_ogg_destroy(void* mm) {
     music_t* m = (music_t*)mm;
     if (!m) return;
     track_free(atomic_exchange(&m->pending, (track_t*)NULL));
@@ -70,7 +70,7 @@ void cron_music_destroy(void* mm) {
     free(m);
 }
 
-void cron_music_play(void* mm, const uint8_t* ogg, int len, int loop) {
+void cron_ogg_play(void* mm, const uint8_t* ogg, int len, int loop) {
     music_t* m = (music_t*)mm;
     if (!m || !ogg || len <= 0) return;
 
@@ -90,12 +90,12 @@ void cron_music_play(void* mm, const uint8_t* ogg, int len, int loop) {
     track_free(atomic_exchange(&m->pending, tk));
 }
 
-void cron_music_stop(void* mm) {
+void cron_ogg_stop(void* mm) {
     music_t* m = (music_t*)mm;
     if (m) atomic_store(&m->stop_req, 1);
 }
 
-void cron_music_set_volume(void* mm, int vol_q8) {
+void cron_ogg_set_volume(void* mm, int vol_q8) {
     music_t* m = (music_t*)mm;
     if (!m) return;
     if (vol_q8 < 0) vol_q8 = 0;
@@ -137,7 +137,7 @@ static void adopt(music_t* m, track_t* tk) {
     pull_src(m, m->s1);
 }
 
-void cron_music_render(void* mm, int16_t* dst, int frames) {
+void cron_ogg_render(void* mm, int16_t* dst, int frames) {
     music_t* m = (music_t*)mm;
     if (!m) { memset(dst, 0, (size_t)frames * 4); return; }
 
