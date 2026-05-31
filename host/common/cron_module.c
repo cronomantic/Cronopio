@@ -143,13 +143,17 @@ void cron_module_render(void* mm, int16_t* dst, int frames) {
     module_t* m = (module_t*)mm;
     if (!m) { memset(dst, 0, (size_t)frames * 4); return; }
 
-    mtrack_t* p = atomic_exchange(&m->pending, (mtrack_t*)NULL);
-    if (p) adopt(m, p);
-
+    /* Process a stop BEFORE adopting a freshly-published track, so a
+     * stop()+play() issued in the same audio block (switching songs) doesn't
+     * have the stale stop_req free the new track right after it was adopted. A
+     * newly-published `pending` always wins over a prior stop. */
     if (atomic_exchange(&m->stop_req, 0)) {
         mtrack_free(m->cur);
         m->cur = NULL;
     }
+
+    mtrack_t* p = atomic_exchange(&m->pending, (mtrack_t*)NULL);
+    if (p) adopt(m, p);
 
     int vol = atomic_load(&m->vol_q8);
     if (!m->cur || m->ended || vol <= 0) {
