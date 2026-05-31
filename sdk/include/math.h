@@ -146,5 +146,6 @@ static inline long lround(float x) { return lroundf(x); }
  * them, with the matching source in runtime/lib/build_picolibc.sh. */
 extern double exp(double x);
 extern double acos(double x);
+extern double log(double x);   /* UQM setupmenu.c gamma curve */
 
 #endif /* CVM_LIBC_MATH_H */
