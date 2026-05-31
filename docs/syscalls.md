@@ -121,6 +121,7 @@ track plays at a time. See [audio.md](audio.md) Layer 4.
 | `cvm_sys_cron_module`       | `void(const void* mod, i32 len, i32 loop)` | Load + play `len` bytes of a tracker module (MOD/S3M/XM/IT) via libxmp; loop!=0 repeats; replaces any current module |
 | `cvm_sys_cron_module_stop`  | `void()`                               | Stop and release the current module            |
 | `cvm_sys_cron_module_volume`| `void(i32 vol)`                        | Module music volume 0..256 (Q8)                |
+| `cvm_sys_cron_module_set`   | `void(i32 param, i32 value)`           | libxmp player effect: interp/DSP/amp/stereo-mix/flags (see `CRON_MOD_*`) |
 
 ## Input
 

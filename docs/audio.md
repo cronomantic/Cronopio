@@ -128,6 +128,7 @@ the base soundtrack and the optional 3DO pack's `.ogg` via Layer 4).
 | `cron_module_play`     | `void(const void* mod, i32 len, i32 loop)` | Load + play `len` bytes of a module; `loop`!=0 repeats forever |
 | `cron_module_stop`   | `void()`                                   | Stop and release the current module |
 | `cron_module_volume` | `void(i32 vol)`                            | Module music volume 0..256 (Q8) |
+| `cron_module_set`    | `void(i32 param, i32 value)`               | libxmp player effect (applied live + across modules): `CRON_MOD_INTERP` (nearest/linear/spline), `CRON_MOD_DSP` (lowpass), `CRON_MOD_AMP`, `CRON_MOD_STEREO_MIX`, `CRON_MOD_FLAGS` (incl. `CRON_MOD_FLAG_A500` Amiga filter). Defaults: spline + lowpass |
 
 **Threading.** Same SPSC discipline as Layer 4: the cart thread opens the module
 (libxmp context) and publishes it through an atomic slot; the audio thread

@@ -96,6 +96,7 @@ extern void     cvm_sys_cron_ogg_volume     (int32_t vol);
 extern void     cvm_sys_cron_module         (const void* mod, int32_t len, int32_t loop);
 extern void     cvm_sys_cron_module_stop    (void);
 extern void     cvm_sys_cron_module_volume  (int32_t vol);
+extern void     cvm_sys_cron_module_set     (int32_t param, int32_t value);
 
 extern uint32_t cvm_sys_cron_pad         (int32_t player);
 extern uint32_t cvm_sys_cron_pad_pressed (int32_t player);
@@ -268,6 +269,25 @@ static inline void     cron_ogg_volume     (int32_t vol)                  { cvm_
 static inline void     cron_module_play    (const void* mod, int32_t len, int32_t loop) { cvm_sys_cron_module(mod, len, loop); }
 static inline void     cron_module_stop    (void)                         { cvm_sys_cron_module_stop(); }
 static inline void     cron_module_volume  (int32_t vol)                  { cvm_sys_cron_module_volume(vol); }
+
+/* cron_module_set(param, value) — libxmp player effects, applied live + across
+ * modules. `param` is one of CRON_MOD_* and `value` its setting (mirrors libxmp
+ * XMP_PLAYER_*). Defaults are SPLINE interpolation + LOWPASS DSP. */
+#define CRON_MOD_AMP            0   /* value: amplification 0..3 */
+#define CRON_MOD_STEREO_MIX     1   /* value: stereo separation -100..100 (%)  */
+#define CRON_MOD_INTERP         2   /* value: CRON_MOD_INTERP_*                 */
+#define CRON_MOD_DSP            3   /* value: CRON_MOD_DSP_* bitmask            */
+#define CRON_MOD_FLAGS          4   /* value: CRON_MOD_FLAG_* bitmask           */
+#define CRON_MOD_INTERP_NEAREST 0
+#define CRON_MOD_INTERP_LINEAR  1
+#define CRON_MOD_INTERP_SPLINE  2   /* default */
+#define CRON_MOD_DSP_NONE       0
+#define CRON_MOD_DSP_LOWPASS    1   /* default */
+#define CRON_MOD_FLAG_VBLANK    1   /* vblank timing       */
+#define CRON_MOD_FLAG_FX9BUG    2   /* emulate FX9 bug     */
+#define CRON_MOD_FLAG_FIXLOOP   4   /* emulate sample-loop bug */
+#define CRON_MOD_FLAG_A500      8   /* Amiga 500 Paula lowpass (authentic .mod) */
+static inline void     cron_module_set     (int32_t param, int32_t value)  { cvm_sys_cron_module_set(param, value); }
 
 static inline uint32_t cron_pad         (int32_t p)                       { return cvm_sys_cron_pad(p); }
 static inline uint32_t cron_pad_pressed (int32_t p)                       { return cvm_sys_cron_pad_pressed(p); }

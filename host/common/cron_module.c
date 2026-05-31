@@ -16,6 +16,9 @@
 
 #include "xmp.h"
 
+/* libxmp has player params indexed 0..13 (XMP_PLAYER_*); 16 covers them all. */
+#define CRON_MOD_NPARAM 16
+
 typedef struct mtrack {
     xmp_context ctx;     /* created, module loaded, player started */
     int         loop;    /* repeat forever when set */
@@ -26,10 +29,17 @@ typedef struct {
     _Atomic(mtrack_t*) pending;
     atomic_int         stop_req;
     atomic_int         vol_q8;    /* 0..256 */
+    /* libxmp player params (interp/dsp/amp/stereo-mix/flags) the cart sets via
+     * cron_module_set; applied on the audio thread when the generation bumps,
+     * so the (non-thread-safe) player is only ever touched by one thread. */
+    atomic_int         set_val[CRON_MOD_NPARAM];
+    atomic_int         set_mask;  /* bit p set => param p has a pending value */
+    atomic_int         set_gen;   /* bumped on every cron_module_set */
 
     /* audio-thread-only state */
     mtrack_t* cur;
     int       ended;
+    int       applied_gen;        /* last set_gen applied to cur->ctx */
 } module_t;
 
 static void mtrack_free(mtrack_t* tk) {
@@ -104,10 +114,29 @@ void cron_module_set_volume(void* mm, int vol_q8) {
     atomic_store(&m->vol_q8, vol_q8);
 }
 
+void cron_module_set(void* mm, int param, int value) {
+    module_t* m = (module_t*)mm;
+    if (!m || param < 0 || param >= CRON_MOD_NPARAM) return;
+    atomic_store(&m->set_val[param], value);
+    atomic_fetch_or(&m->set_mask, 1 << param);
+    atomic_fetch_add(&m->set_gen, 1);   /* signal the audio thread to re-apply */
+}
+
+/* Audio thread. Push every cart-set player param onto the current context. */
+static void apply_params(module_t* m) {
+    if (!m->cur) return;
+    int mask = atomic_load(&m->set_mask);
+    for (int p = 0; p < CRON_MOD_NPARAM; ++p)
+        if (mask & (1 << p))
+            xmp_set_player(m->cur->ctx, p, atomic_load(&m->set_val[p]));
+    m->applied_gen = atomic_load(&m->set_gen);
+}
+
 static void adopt(module_t* m, mtrack_t* tk) {
     mtrack_free(m->cur);
     m->cur   = tk;
     m->ended = 0;
+    apply_params(m);   /* re-apply the cart's effect settings to the new module */
 }
 
 void cron_module_render(void* mm, int16_t* dst, int frames) {
@@ -127,6 +156,9 @@ void cron_module_render(void* mm, int16_t* dst, int frames) {
         memset(dst, 0, (size_t)frames * 4);
         return;
     }
+
+    /* Apply any effect change the cart requested since the last block. */
+    if (atomic_load(&m->set_gen) != m->applied_gen) apply_params(m);
 
     /* loop==0 (cart wants repeat) -> 0 disables libxmp's loop counter (plays
      * forever); loop set -> pass 1 so it stops after one play-through, filling

@@ -679,6 +679,12 @@ static int sys_module_volume(struct cvm_image *img, int32_t *r, void *ud) {
     r[0] = 0;
     return 0;
 }
+static int sys_module_set(struct cvm_image *img, int32_t *r, void *ud) {
+    (void)img;
+    cron_module_set(((ctx_t*)ud)->c->module, (int)r[0], (int)r[1]);
+    r[0] = 0;
+    return 0;
+}
 
 /* ------ input ----------------------------------------------------------- */
 
@@ -857,6 +863,7 @@ static const entry_t kSyscalls[] = {
     { "cvm_sys_cron_module",        sys_module        },
     { "cvm_sys_cron_module_stop",   sys_module_stop   },
     { "cvm_sys_cron_module_volume", sys_module_volume },
+    { "cvm_sys_cron_module_set",    sys_module_set    },
     /* input */
     { "cvm_sys_cron_pad",          sys_pad          },
     { "cvm_sys_cron_pad_pressed",  sys_pad_pressed  },

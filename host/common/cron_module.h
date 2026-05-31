@@ -27,6 +27,13 @@ void  cron_module_stop(void* m);
 /* Cart thread. 0..256 (Q8) applied to the rendered module. */
 void  cron_module_set_volume(void* m, int vol_q8);
 
+/* Cart thread. Set a libxmp player parameter (interpolation / DSP / amplification
+ * / stereo-mix / flags such as the Amiga A500 filter) on the current and future
+ * modules. `param`/`value` mirror libxmp's XMP_PLAYER_* and its value enums (the
+ * cart-facing CRON_MOD_* constants in cronopio.h). Applied on the audio thread,
+ * so it is safe to call while a module plays (and persists across modules). */
+void  cron_module_set(void* m, int param, int value);
+
 /* Audio thread. Write `frames` stereo S16 frames of module music into `dst`
  * (overwrites; silence when nothing is playing). */
 void  cron_module_render(void* m, int16_t* dst, int frames);
