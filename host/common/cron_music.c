@@ -16,7 +16,7 @@
 #define STB_VORBIS_HEADER_ONLY
 #define STB_VORBIS_NO_STDIO
 #define STB_VORBIS_NO_PUSHDATA_API
-#include "vendor/stb_vorbis.c"
+#include "../external/stb_vorbis.c"
 
 #define SRCBUF_FRAMES 1024   /* source frames decoded per stb_vorbis pull */
 

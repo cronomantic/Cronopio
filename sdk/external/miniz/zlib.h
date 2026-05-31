@@ -1,5 +1,5 @@
 /* <zlib.h> — Cronopio SDK: zlib API shim backed by vendored miniz (see
- * sdk/lib/miniz.c, miniz.h; public domain / Unlicense). miniz exposes the
+ * sdk/external/miniz/miniz.c, miniz.h; public domain / Unlicense). miniz exposes the
  * zlib-compatible streaming names (z_stream, inflate, inflateInit2,
  * inflateEnd, inflateReset, Z_OK, …) unless MINIZ_NO_ZLIB_COMPATIBLE_NAMES
  * is set — we leave them on. Only the inflate side is built; the cart

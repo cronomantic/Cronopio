@@ -43,7 +43,7 @@
 #define STBI_NO_PIC
 #define STBI_NO_PNM
 #define STBI_NO_BMP        /* we have our own BMP path */
-#include "vendor/stb_image.h"
+#include "external/stb_image.h"
 
 typedef struct {
     int      w, h;

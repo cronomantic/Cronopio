@@ -6,7 +6,7 @@ add_library(cronopio_common STATIC
     common/apu.c
     common/midisynth.c
     common/cron_music.c
-    common/vendor/stb_vorbis.c
+    external/stb_vorbis.c
     common/bios_sf2.c
     common/input.c
 )
@@ -16,7 +16,7 @@ target_include_directories(cronopio_common PUBLIC common)
 set_source_files_properties(common/bios_sf2.c PROPERTIES COMPILE_OPTIONS "-std=gnu23")
 
 # stb_vorbis is vendored third-party code; don't fail the build on its warnings.
-set_source_files_properties(common/vendor/stb_vorbis.c PROPERTIES COMPILE_OPTIONS "-w")
+set_source_files_properties(external/stb_vorbis.c PROPERTIES COMPILE_OPTIONS "-w")
 
 # TinySoundFont (vendored as a submodule under external/), the MIDI+SoundFont
 # music synth used by common/midisynth.c.
