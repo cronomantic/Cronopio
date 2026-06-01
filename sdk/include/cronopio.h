@@ -17,6 +17,14 @@
 
 #include <stdint.h>
 
+/* C++ carts (e.g. the Exult port) include this header from C++ TUs. Without an
+ * extern "C" guard the cvm_sys_* declarations get C++ name mangling, so the
+ * translator/host can't bind them as syscalls by their plain C names. The guard
+ * is inert in C. */
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define CRON_SCREEN_W  320
 #define CRON_SCREEN_H  240
 #define CRON_PAL_SIZE  256
@@ -716,5 +724,9 @@ static inline uint32_t cron_rom_size(void) {
 /* Frame-only variant: no setup pass. */
 static inline void cron__noop_setup(void) { }
 #define CRONOPIO_CART(frame_fn) CRONOPIO_CART_INIT(cron__noop_setup, frame_fn)
+
+#ifdef __cplusplus
+}  /* extern "C" */
+#endif
 
 #endif

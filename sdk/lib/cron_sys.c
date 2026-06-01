@@ -112,6 +112,18 @@ char *strerror(int errnum) {
     return (char *)"error";
 }
 
+/* strerror_r (POSIX/XSI form: fill buf, return 0). picolibc routes its own
+ * strerror_r through the _user_strerror hook the translator rejects, so the
+ * machine port supplies it. Needed by libc++ <system_error>/<locale> in a C++
+ * cart; unreferenced by the plain-C DOOM/Quake path. */
+int strerror_r(int errnum, char *buf, size_t buflen) {
+    (void)errnum;
+    const char *m = "error";
+    size_t i = 0;
+    if (buflen) { for (; m[i] && i + 1 < buflen; ++i) buf[i] = m[i]; buf[i] = 0; }
+    return 0;
+}
+
 /* ============================== stdlib.h =============================== */
 /* picolibc owns abs/labs, atoi/atol, strtol/strtoul, qsort/bsearch. The malloc
  * family is CONFIGURABLE per cart (see the two modes below): by default it is
@@ -554,6 +566,13 @@ int close(int fd) {
     return 0;
 }
 
+/* Locale + strftime stubs. C carts (DOOM/Quake) link picolibc built
+ * --with-stdio, which omits these, so the machine port supplies trivial "C"
+ * locale stubs. A C++ iostream/locale cart (e.g. Exult) instead links picolibc
+ * --with-locale, which provides the REAL setlocale/localeconv/strftime — so the
+ * cart's build defines CRON_SYS_LIBC_HAS_LOCALE to suppress these duplicates
+ * (otherwise llvm-link reports "symbol multiply defined"). */
+#ifndef CRON_SYS_LIBC_HAS_LOCALE
 char *setlocale(int category, const char *locale) {
     (void)category; (void)locale;
     return (char *)"C";
@@ -574,6 +593,7 @@ struct lconv *localeconv(void) {
     lc.negative_sign = empty;
     return &lc;
 }
+#endif /* !CRON_SYS_LIBC_HAS_LOCALE */
 
 int remove(const char *path) {
     ramfs_load();
@@ -804,12 +824,20 @@ struct tm *localtime(const time_t *timep) {
 
 struct tm *gmtime(const time_t *timep) { return localtime(timep); }
 
+/* No-op tzset (the console runs on GMT — there is no TZ environment). picolibc's
+ * real strftime (linked when a C++ locale cart builds picolibc --with-locale)
+ * calls tzset; the --with-stdio C path uses cron_sys.c's own strftime stub and
+ * never references it, so this is inert for DOOM/Quake. */
+void tzset(void) { }
+
+#ifndef CRON_SYS_LIBC_HAS_LOCALE   /* picolibc --with-locale provides the real one */
 size_t strftime(char *s, size_t max, const char *format, const struct tm *tm) {
     (void)format; (void)tm;
     if (max == 0) return 0;
     s[0] = '\0';   /* empty string — DOOM tolerates an empty timestamp */
     return 0;
 }
+#endif
 
 char *asctime(const struct tm *tm) {
     (void)tm;
