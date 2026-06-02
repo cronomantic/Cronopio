@@ -772,6 +772,11 @@ int mkdir(const char *path, unsigned int mode) {
  * any, are removed by unlink()ing the files themselves). */
 int rmdir(const char *path) { (void)path; return 0; }
 
+/* There is no working directory on the cart: every path is resolved against the
+ * RAM-FS / ROM-FS by its full name. chdir() is a no-op success so engine code
+ * that calls it (Exult's U7chdir) links and proceeds. */
+int chdir(const char *path) { (void)path; return 0; }
+
 /* fstat over the fd table: an open fd is always a regular file (RAM-FS or
  * ROM-backed); report its size. */
 int fstat(int fd, struct stat *buf) {
