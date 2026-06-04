@@ -659,11 +659,43 @@ static int cvm_dir_child(const char *prefix, const char *nm,
     return 1;
 }
 
+/* Does any stored entry (RAM-FS file or the ROM blob) live under normalised
+ * `prefix`? Mirrors readdir_r's scan but stops at the first hit. Used to give
+ * opendir() POSIX-like existence semantics (see below). */
+static int cvm_dir_has_child(const char *prefix) {
+    char child[RAMFS_NAME]; int is_dir;
+    for (int i = 0; i < RAMFS_MAX; ++i) {
+        if (!g_fs[i].used) continue;
+        char nm_norm[RAMFS_NAME];
+        cvm_norm_path(g_fs[i].name, nm_norm);
+        if (cvm_dir_child(prefix, nm_norm, child, &is_dir)) return 1;
+    }
+    if (g_rom_path && cron_rom_size() > 0) {
+        char rom_norm[RAMFS_NAME];
+        cvm_norm_path(g_rom_path, rom_norm);
+        if (cvm_dir_child(prefix, rom_norm, child, &is_dir)) return 1;
+    }
+    return 0;
+}
+
 DIR *opendir(const char *path) {
     ramfs_load();
+    char prefix[RAMFS_NAME];
+    cvm_norm_path(path, prefix);
+    /* A real opendir() FAILS for a path that is not an existing directory.
+     * The old code returned a handle for ANY path, so opendir() succeeded for
+     * non-existent paths — which broke callers that probe existence via
+     * opendir() (e.g. Exult's U7exists -> U7opendir): a missing file/dir read
+     * as present, then the follow-up open threw. In this implicit-directory
+     * FS a directory "exists" iff it is the root or some stored entry lives
+     * under it (empty directories have no representation here, as before). */
+    if (prefix[0] != 0 && !cvm_dir_has_child(prefix)) {
+        errno = ENOENT;
+        return NULL;
+    }
     DIR *d = (DIR *)malloc(sizeof *d);
     if (!d) { errno = ENOMEM; return NULL; }
-    cvm_norm_path(path, d->prefix);
+    memcpy(d->prefix, prefix, sizeof d->prefix);
     d->next = 0; d->rom_done = 0; d->n_emitted = 0;
     return d;
 }
