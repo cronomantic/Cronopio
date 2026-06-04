@@ -357,7 +357,13 @@ void _cvm_assert_fail(const char *expr, const char *file, int line) {
 int __isnand(double x) { return x != x; }
 
 /* ---- the persisted RAM filesystem (backs fopen-ed files) --------------- */
-#define RAMFS_MAX    24
+/* RAMFS_MAX caps the live file count. DOOM/Quake need only a handful (saves),
+ * but Exult unpacks a whole U7 'gamedat' (npc/usecode flags + up to ~144
+ * per-superchunk u7iregNN region files per map, ×maps) when it restores
+ * initgame.dat — well past a few dozen. 512 covers BG + SI gamedat with
+ * headroom. The persisted blob is count-prefixed (see ramfs_load), so growing
+ * this is backward-compatible with existing saves. */
+#define RAMFS_MAX    512
 #define RAMFS_NAME   96
 #define RAMFS_MAGIC  0x31534643u   /* 'C','F','S','1' little-endian */
 
