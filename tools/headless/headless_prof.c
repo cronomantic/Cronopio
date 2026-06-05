@@ -114,6 +114,12 @@ int main(int argc, char** argv) {
     cvm_profile_reset(img.func_count);
     { const char* w = getenv("CVM_PROF_WATCH"); if (w) cvm_prof_watch = (uint32_t)strtoul(w, NULL, 0); }
 
+    /* [debug] Apply the instruction cap BEFORE the entry too, so a hang inside
+     * the cart's global ctors / setup() (before any frame, e.g. an init loop)
+     * is broken out and the dump shows the spinning function. (The post-entry
+     * set below also stands for runaway loops inside a frame.) */
+    { const char* c = getenv("CVM_PROF_CAP"); if (c) cvm_prof_cap = strtoull(c, NULL, 0); }
+
     int32_t ret = 0;
     rc = cvm_run(&img, &ret);
     if (rc != CVM_OK && rc != CVM_E_SYSCALL_TRAP) {

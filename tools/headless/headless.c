@@ -43,9 +43,17 @@
 #define PAD_BIT_START (1u<<10)
 #define PAD_BIT_SEL   (1u<<11)
 
-#define PAD_MAX_DIRECTIVES 8192
-static struct { int frame; uint32_t mask; } g_pad[PAD_MAX_DIRECTIVES];
-static int g_pad_n = 0;
+/* Unified input timeline (--input=FILE; --pad=FILE is a pad-only alias). One
+ * directive per line: `<frame> [TOKENS...]`. Held state (pad buttons + mouse
+ * buttons) comes from the latest directive with frame <= f; the cursor position
+ * is the latest MOUSE <x> <y> <= f (sticky); WHEEL fires on its exact frame.
+ *   pad:   UP DOWN LEFT RIGHT A B X Y L R START SELECT      (held)
+ *   mouse: MOUSE <x> <y> | LB RB MB (buttons held) | WHEEL <n> (impulse)
+ * This is the decided design (exult-input-model): ONE pad+mouse+wheel timeline. */
+#define INPUT_MAX 8192
+static struct { int frame; uint32_t pad, mbtn; int has_move, mx, my, wheel; }
+    g_in[INPUT_MAX];
+static int g_in_n = 0;
 
 static int streq_ci(const char* a, const char* b) {
     for (; *a && *b; ++a, ++b) {
@@ -74,7 +82,17 @@ static uint32_t pad_token(const char* t) {
     return 0;
 }
 
-static void load_pad_script(const char* path) {
+/* Mouse-button token -> bit value (1=L, 2=R, 4=M, matching cron_mouse). */
+static uint32_t mouse_btn_token(const char* t) {
+    if (streq_ci(t, "LB")) return 1u;
+    if (streq_ci(t, "RB")) return 2u;
+    if (streq_ci(t, "MB")) return 4u;
+    return 0;
+}
+
+/* Parse a timeline script into g_in. pad_only=1 routes every token to the pad
+ * parser (the --pad= alias: MOUSE/WHEEL/LB/RB/MB are not recognised there). */
+static void load_input_script(const char* path, int pad_only) {
     FILE* f = fopen(path, "r");
     if (!f) { perror(path); return; }
     char line[256];
@@ -85,30 +103,55 @@ static void load_pad_script(const char* path) {
         char* tok = strtok(p, " \t\r\n");
         if (!tok) continue;
         int frame = atoi(tok);
-        uint32_t mask = 0;
-        while ((tok = strtok(NULL, " \t\r\n")) != NULL)
-            mask |= pad_token(tok);
-        if (g_pad_n < PAD_MAX_DIRECTIVES) {
-            g_pad[g_pad_n].frame = frame;
-            g_pad[g_pad_n].mask = mask;
-            ++g_pad_n;
+        uint32_t pad = 0, mbtn = 0;
+        int has_move = 0, mx = 0, my = 0, wheel = 0;
+        while ((tok = strtok(NULL, " \t\r\n")) != NULL) {
+            uint32_t mb;
+            if (!pad_only && streq_ci(tok, "MOUSE")) {
+                char* a = strtok(NULL, " \t\r\n");
+                char* b = strtok(NULL, " \t\r\n");
+                if (a && b) { has_move = 1; mx = atoi(a); my = atoi(b); }
+            } else if (!pad_only && streq_ci(tok, "WHEEL")) {
+                char* a = strtok(NULL, " \t\r\n");
+                if (a) wheel = atoi(a);
+            } else if (!pad_only && (mb = mouse_btn_token(tok)) != 0) {
+                mbtn |= mb;
+            } else {
+                pad |= pad_token(tok);
+            }
+        }
+        if (g_in_n < INPUT_MAX) {
+            g_in[g_in_n].frame = frame; g_in[g_in_n].pad = pad;
+            g_in[g_in_n].mbtn = mbtn; g_in[g_in_n].has_move = has_move;
+            g_in[g_in_n].mx = mx; g_in[g_in_n].my = my; g_in[g_in_n].wheel = wheel;
+            ++g_in_n;
         }
     }
     fclose(f);
-    fprintf(stderr, "[pad] loaded %d directive(s) from %s\n", g_pad_n, path);
+    fprintf(stderr, "[input] loaded %d directive(s) from %s\n", g_in_n, path);
 }
 
-/* The pad mask in effect at frame f = the last directive with frame <= f. */
-static uint32_t pad_mask_at(int f) {
-    uint32_t mask = 0;
-    int best = -1;
-    for (int i = 0; i < g_pad_n; ++i) {
-        if (g_pad[i].frame <= f && g_pad[i].frame >= best) {
-            best = g_pad[i].frame;
-            mask = g_pad[i].mask;
+/* Resolve the held input state at frame f: pad+buttons from the latest
+ * directive <= f, cursor position from the latest MOUSE <= f (sticky). */
+static void input_state_at(int f, uint32_t* pad, uint32_t* mbtn, int* mx, int* my) {
+    int best = -1, bestmove = -1;
+    *pad = 0; *mbtn = 0; *mx = 0; *my = 0;
+    for (int i = 0; i < g_in_n; ++i) {
+        if (g_in[i].frame <= f && g_in[i].frame >= best) {
+            best = g_in[i].frame; *pad = g_in[i].pad; *mbtn = g_in[i].mbtn;
+        }
+        if (g_in[i].has_move && g_in[i].frame <= f && g_in[i].frame >= bestmove) {
+            bestmove = g_in[i].frame; *mx = g_in[i].mx; *my = g_in[i].my;
         }
     }
-    return mask;
+}
+
+/* Wheel impulse to deliver on exactly frame f (sum of any WHEEL directives there). */
+static int wheel_at(int f) {
+    int w = 0;
+    for (int i = 0; i < g_in_n; ++i)
+        if (g_in[i].frame == f) w += g_in[i].wheel;
+    return w;
 }
 
 /* Defined in the SDL host; the common layer calls it for sys_time_ms. A frozen
@@ -132,15 +175,22 @@ static uint8_t* slurp(const char* path, size_t* out_len) {
 }
 
 int main(int argc, char** argv) {
+    /* [bp] Unbuffered stdout so cron_log breadcrumbs are flushed immediately —
+     * a hang/kill otherwise loses the tail of the log (block buffering to a
+     * redirected file). Harmless for normal runs. */
+    setvbuf(stdout, NULL, _IONBF, 0);
     if (argc < 2) {
-        fprintf(stderr, "usage: %s cart.bin [frames] [out.ppm] [--pad=script]\n", argv[0]);
+        fprintf(stderr, "usage: %s cart.bin [frames] [out.ppm] "
+                        "[--input=script | --pad=script]\n", argv[0]);
         return 1;
     }
     int frames = 1;
     const char* ppmpath = NULL;
     for (int a = 2; a < argc; ++a) {
-        if (strncmp(argv[a], "--pad=", 6) == 0) {
-            load_pad_script(argv[a] + 6);
+        if (strncmp(argv[a], "--input=", 8) == 0) {
+            load_input_script(argv[a] + 8, /*pad_only*/ 0);
+        } else if (strncmp(argv[a], "--pad=", 6) == 0) {
+            load_input_script(argv[a] + 6, /*pad_only*/ 1);   /* pad-only alias */
         } else if (strstr(argv[a], ".ppm")) {
             ppmpath = argv[a];
         } else {
@@ -187,10 +237,22 @@ int main(int argc, char** argv) {
         if (hl_progress) { fprintf(stderr, "[frame %d/%d]\n", f, frames); fflush(stderr); }
         g_frame_ms = (uint64_t)f * 1000u / 60u;   /* virtual 60Hz clock */
         cronopio_console_begin_frame(&console);
-        /* Inject scripted pad input (after begin_frame so pad_prev holds the
-         * previous mask → pad_pressed edge detection works). */
-        if (g_pad_n)
-            cron_input_set_pad(&console, 0, pad_mask_at(f));
+        /* Inject the scripted input timeline (after begin_frame so *_prev holds
+         * the previous state → pad_pressed/mouse-edge detection works). */
+        if (g_in_n) {
+            uint32_t pad = 0, mbtn = 0;
+            int mx = 0, my = 0;
+            input_state_at(f, &pad, &mbtn, &mx, &my);
+            cron_input_set_pad(&console, 0, pad);
+            static int prev_mx = 0, prev_my = 0;
+            cron_input_mouse_motion(&console, mx, my, mx - prev_mx, my - prev_my);
+            prev_mx = mx; prev_my = my;
+            cron_input_mouse_button(&console, 0, (mbtn & 1u) ? 1 : 0);   /* L */
+            cron_input_mouse_button(&console, 1, (mbtn & 2u) ? 1 : 0);   /* R */
+            cron_input_mouse_button(&console, 2, (mbtn & 4u) ? 1 : 0);   /* M */
+            int w = wheel_at(f);
+            if (w) cron_input_mouse_wheel(&console, w);
+        }
         if (console.frame_fn_index > 0) {
             int32_t fr = 0;
             rc = cvm_call(&img, (uint32_t)console.frame_fn_index, NULL, 0, &fr);
