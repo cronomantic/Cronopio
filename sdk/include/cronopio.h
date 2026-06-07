@@ -128,6 +128,9 @@ extern void     cvm_sys_cron_blt         (int32_t img, int32_t dx, int32_t dy, i
 /* buffer->buffer colour-key blit (see cron_blt_buf below): dst/src are cart
  * pointers; w/h and dx/dy are packed (the cron_blt_buf wrapper packs them). */
 extern void     cvm_sys_cron_blt_buf     (uint8_t* dst, int32_t dst_dim, int32_t dst_pitch, const uint8_t* src, int32_t src_pitch, int32_t dst_pos, int32_t blt_dim, int32_t colkey);
+/* blend-aware buffer->buffer blit (see cron_blt_buf_blend): like cvm_sys_cron_blt_buf
+ * but the last arg packs blend_slot<<16 | (colkey & 0xFFFF). */
+extern void     cvm_sys_cron_blt_buf_blend(uint8_t* dst, int32_t dst_dim, int32_t dst_pitch, const uint8_t* src, int32_t src_pitch, int32_t dst_pos, int32_t blt_dim, int32_t colkey_blend);
 /* Forward decls at file scope — referencing these struct tags inside a
  * prototype's argument list (without this) would otherwise scope them to
  * the prototype, making the later typedef incompatible. */
@@ -352,6 +355,21 @@ static inline void     cron_blt_buf     (uint8_t* dst, int32_t dst_w, int32_t ds
         (int32_t)(((uint32_t)dx << 16) | ((uint32_t)dy & 0xFFFFu)),
         (int32_t)(((uint32_t)blt_w << 16) | ((uint32_t)blt_h & 0xFFFFu)),
         colkey);
+}
+/* As cron_blt_buf, but each written pixel is composited through blend LUT
+ * `blend_slot` (1..7, registered via cron_blend_table) as out = lut[src*256 +
+ * dst]. blend_slot 0 falls back to a plain opaque copy. Lets a cart offload
+ * translucent compositing (e.g. paletted alpha tables) to the host. */
+static inline void     cron_blt_buf_blend(uint8_t* dst, int32_t dst_w, int32_t dst_h, int32_t dst_pitch,
+                                         const uint8_t* src, int32_t src_pitch,
+                                         int32_t dx, int32_t dy, int32_t blt_w, int32_t blt_h,
+                                         int32_t colkey, int32_t blend_slot) {
+    cvm_sys_cron_blt_buf_blend(dst,
+        (int32_t)(((uint32_t)dst_w << 16) | ((uint32_t)dst_h & 0xFFFFu)),
+        dst_pitch, src, src_pitch,
+        (int32_t)(((uint32_t)dx << 16) | ((uint32_t)dy & 0xFFFFu)),
+        (int32_t)(((uint32_t)blt_w << 16) | ((uint32_t)blt_h & 0xFFFFu)),
+        (int32_t)(((uint32_t)blend_slot << 16) | ((uint32_t)colkey & 0xFFFFu)));
 }
 static inline void     cron_bltm        (int32_t tm, int32_t dx, int32_t dy, int32_t sx, int32_t sy, int32_t w, int32_t h, int32_t colkey) { cvm_sys_cron_bltm(tm, dx, dy, sx, sy, w, h, colkey); }
 

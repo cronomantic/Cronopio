@@ -272,7 +272,23 @@ static int sys_blt_buf(struct cvm_image *img, int32_t *r, void *ud) {
     int blt_w = (int)((uint32_t)r[6] >> 16),  blt_h = (int)((uint32_t)r[6] & 0xFFFF);
     cron_gpu_blt_buf(X->c, HEAP, X->img->mem_size,
                      (uint32_t)r[0], dst_w, dst_h, (int)r[2],
-                     (uint32_t)r[3], (int)r[4], dx, dy, blt_w, blt_h, (int)r[7]);
+                     (uint32_t)r[3], (int)r[4], dx, dy, blt_w, blt_h, (int)r[7], 0);
+    r[0] = 0; return 0;
+}
+/* sys_blt_buf_blend — like sys_blt_buf but r7 packs the blend slot in the high
+ * 16 bits and the colour-key (i16) in the low 16: r7 = blend_slot<<16 | (colkey
+ * & 0xFFFF). Composites each written pixel through that 256x256 LUT. */
+static int sys_blt_buf_blend(struct cvm_image *img, int32_t *r, void *ud) {
+    (void)img; GUARD;
+    int dst_w = (int)((uint32_t)r[1] >> 16),  dst_h = (int)((uint32_t)r[1] & 0xFFFF);
+    int dx    = (int)(int16_t)((uint32_t)r[5] >> 16);
+    int dy    = (int)(int16_t)((uint32_t)r[5] & 0xFFFF);
+    int blt_w = (int)((uint32_t)r[6] >> 16),  blt_h = (int)((uint32_t)r[6] & 0xFFFF);
+    int colkey      = (int)(int16_t)((uint32_t)r[7] & 0xFFFF);
+    int blend_slot  = (int)(((uint32_t)r[7] >> 16) & 0xFF);
+    cron_gpu_blt_buf(X->c, HEAP, X->img->mem_size,
+                     (uint32_t)r[0], dst_w, dst_h, (int)r[2],
+                     (uint32_t)r[3], (int)r[4], dx, dy, blt_w, blt_h, colkey, blend_slot);
     r[0] = 0; return 0;
 }
 static int sys_bltm(struct cvm_image *img, int32_t *r, void *ud) {
@@ -898,6 +914,7 @@ static const entry_t kSyscalls[] = {
     { "cvm_sys_cron_tilemap",      sys_tilemap      },
     { "cvm_sys_cron_blt",          sys_blt          },
     { "cvm_sys_cron_blt_buf",      sys_blt_buf      },
+    { "cvm_sys_cron_blt_buf_blend", sys_blt_buf_blend },
     { "cvm_sys_cron_bltm",         sys_bltm         },
     { "cvm_sys_cron_bltm_raster",  sys_bltm_raster  },
     { "cvm_sys_cron_bltm_affine",  sys_bltm_affine  },

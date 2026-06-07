@@ -406,11 +406,14 @@ void cron_gpu_blt (cronopio_console_t* c, uint8_t* heap, int img,
  * heap offsets; dst is dst_w x dst_h with row stride dst_pitch; src rows are
  * src_pitch apart (pass a src already advanced to its sub-origin). The blt_w x
  * blt_h rect lands at (dx,dy) in dst, clamped to dst bounds; source pixels equal
- * to `colkey` are skipped (-1 = fully opaque). Bounds-checked against mem_size. */
+ * to `colkey` are skipped (-1 = fully opaque). Bounds-checked against mem_size.
+ * blend_slot (0 = opaque copy; 1..7 = a bound 256x256 LUT) composites each
+ * written pixel as out = table[src*256 + dst], like put_px's blend path. */
 void cron_gpu_blt_buf(cronopio_console_t* c, uint8_t* heap, uint32_t mem_size,
                       uint32_t dst, int dst_w, int dst_h, int dst_pitch,
                       uint32_t src, int src_pitch,
-                      int dx, int dy, int blt_w, int blt_h, int colkey);
+                      int dx, int dy, int blt_w, int blt_h, int colkey,
+                      int blend_slot);
 /* Blit a pixel region (sx,sy,w,h) of tilemap `tm` to (dx,dy). colkey as blt.
  * Tile cells use the layout:
  *   0xFFFF        = empty cell

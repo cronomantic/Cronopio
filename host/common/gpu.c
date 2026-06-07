@@ -501,12 +501,15 @@ void cron_gpu_blt(cronopio_console_t* c, uint8_t* heap, int img,
 
 /* Buffer->buffer colour-key blit, native (see console.h). dst/src are heap
  * offsets; the whole accessed range of each is validated against mem_size so a
- * bad cart pointer can't read/write out of the cart image. */
+ * bad cart pointer can't read/write out of the cart image. When blend_slot is a
+ * bound slot (1..7) each written pixel is composited through that 256x256 LUT
+ * (out = table[src*256 + dst]), exactly like put_px's blend path — letting a
+ * cart offload translucent compositing too; blend_slot 0 = plain opaque copy. */
 void cron_gpu_blt_buf(cronopio_console_t* c, uint8_t* heap, uint32_t mem_size,
                       uint32_t dst, int dst_w, int dst_h, int dst_pitch,
                       uint32_t src, int src_pitch,
-                      int dx, int dy, int blt_w, int blt_h, int colkey) {
-    (void)c;
+                      int dx, int dy, int blt_w, int blt_h, int colkey,
+                      int blend_slot) {
     if (blt_w <= 0 || blt_h <= 0 || dst_w <= 0 || dst_h <= 0) return;
     if (dst_pitch <= 0 || src_pitch <= 0) return;
     /* Validate the full byte extents touched in each buffer. dst spans rows
@@ -515,6 +518,11 @@ void cron_gpu_blt_buf(cronopio_console_t* c, uint8_t* heap, uint32_t mem_size,
     uint64_t dst_end = (uint64_t)dst + (uint64_t)(dst_h - 1) * (uint64_t)dst_pitch + (uint64_t)dst_w;
     uint64_t src_end = (uint64_t)src + (uint64_t)(blt_h - 1) * (uint64_t)src_pitch + (uint64_t)blt_w;
     if (dst_end > mem_size || src_end > mem_size) return;
+    /* Resolve the blend LUT once (loop-invariant). */
+    const uint8_t* tbl = NULL;
+    if (blend_slot > 0 && blend_slot < CRONOPIO_BLEND_SLOTS && c->blend_tables[blend_slot].used) {
+        tbl = heap + c->blend_tables[blend_slot].offset;
+    }
     uint8_t*       d = heap + dst;
     const uint8_t* s = heap + src;
     for (int j = 0; j < blt_h; ++j) {
@@ -527,7 +535,7 @@ void cron_gpu_blt_buf(cronopio_console_t* c, uint8_t* heap, uint32_t mem_size,
             if (dxx < 0 || dxx >= dst_w) continue;
             uint8_t px = srow[i];
             if (colkey >= 0 && px == (uint8_t)colkey) continue;
-            drow[dxx] = px;
+            drow[dxx] = tbl ? tbl[(unsigned)px * 256u + drow[dxx]] : px;
         }
     }
 }
