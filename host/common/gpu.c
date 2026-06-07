@@ -499,6 +499,39 @@ void cron_gpu_blt(cronopio_console_t* c, uint8_t* heap, int img,
     }
 }
 
+/* Buffer->buffer colour-key blit, native (see console.h). dst/src are heap
+ * offsets; the whole accessed range of each is validated against mem_size so a
+ * bad cart pointer can't read/write out of the cart image. */
+void cron_gpu_blt_buf(cronopio_console_t* c, uint8_t* heap, uint32_t mem_size,
+                      uint32_t dst, int dst_w, int dst_h, int dst_pitch,
+                      uint32_t src, int src_pitch,
+                      int dx, int dy, int blt_w, int blt_h, int colkey) {
+    (void)c;
+    if (blt_w <= 0 || blt_h <= 0 || dst_w <= 0 || dst_h <= 0) return;
+    if (dst_pitch <= 0 || src_pitch <= 0) return;
+    /* Validate the full byte extents touched in each buffer. dst spans rows
+     * 0..dst_h-1 of dst_pitch; src spans rows 0..blt_h-1 of src_pitch (the cart
+     * passes src already at its sub-origin, so blt_h rows is the read extent). */
+    uint64_t dst_end = (uint64_t)dst + (uint64_t)(dst_h - 1) * (uint64_t)dst_pitch + (uint64_t)dst_w;
+    uint64_t src_end = (uint64_t)src + (uint64_t)(blt_h - 1) * (uint64_t)src_pitch + (uint64_t)blt_w;
+    if (dst_end > mem_size || src_end > mem_size) return;
+    uint8_t*       d = heap + dst;
+    const uint8_t* s = heap + src;
+    for (int j = 0; j < blt_h; ++j) {
+        int dyy = dy + j;
+        if (dyy < 0 || dyy >= dst_h) continue;
+        const uint8_t* srow = s + (size_t)j * (size_t)src_pitch;
+        uint8_t*       drow = d + (size_t)dyy * (size_t)dst_pitch;
+        for (int i = 0; i < blt_w; ++i) {
+            int dxx = dx + i;
+            if (dxx < 0 || dxx >= dst_w) continue;
+            uint8_t px = srow[i];
+            if (colkey >= 0 && px == (uint8_t)colkey) continue;
+            drow[dxx] = px;
+        }
+    }
+}
+
 /* Full rotozoom + flip. `rotate_packed` is (rotate_deg & 0xFFFF) in low
  * 16 bits, (flags << 16) in high 16. Flags: CRON_BLT_HFLIP / VFLIP.
  * Flip is applied to the SOURCE sampling (mirror within the sprite's

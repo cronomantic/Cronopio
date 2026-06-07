@@ -399,6 +399,18 @@ int  cron_gpu_tilemap(cronopio_console_t* c, int slot, uint32_t offset, int w, i
  * horizontally/vertically (Pyxel convention). */
 void cron_gpu_blt (cronopio_console_t* c, uint8_t* heap, int img,
                    int dx, int dy, int sx, int sy, int w, int h, int colkey);
+/* Blit a flat 8bpp sprite straight from a cart buffer INTO another cart buffer
+ * (not the framebuffer), in native code. General buffer->buffer colour-key blit:
+ * the VM composes a sprite without running the per-pixel loop as bytecode (the
+ * win on weak targets where the VM is ~100x slower than native). `dst`/`src` are
+ * heap offsets; dst is dst_w x dst_h with row stride dst_pitch; src rows are
+ * src_pitch apart (pass a src already advanced to its sub-origin). The blt_w x
+ * blt_h rect lands at (dx,dy) in dst, clamped to dst bounds; source pixels equal
+ * to `colkey` are skipped (-1 = fully opaque). Bounds-checked against mem_size. */
+void cron_gpu_blt_buf(cronopio_console_t* c, uint8_t* heap, uint32_t mem_size,
+                      uint32_t dst, int dst_w, int dst_h, int dst_pitch,
+                      uint32_t src, int src_pitch,
+                      int dx, int dy, int blt_w, int blt_h, int colkey);
 /* Blit a pixel region (sx,sy,w,h) of tilemap `tm` to (dx,dy). colkey as blt.
  * Tile cells use the layout:
  *   0xFFFF        = empty cell

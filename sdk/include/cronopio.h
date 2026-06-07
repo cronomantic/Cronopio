@@ -125,6 +125,9 @@ extern int32_t  cvm_sys_cron_save_reserve(int32_t bytes);
 extern void     cvm_sys_cron_image       (int32_t slot, const uint8_t* ptr, int32_t w, int32_t h);
 extern void     cvm_sys_cron_tilemap     (int32_t slot, const uint16_t* ptr, int32_t w, int32_t h, int32_t img);
 extern void     cvm_sys_cron_blt         (int32_t img, int32_t dx, int32_t dy, int32_t sx, int32_t sy, int32_t w, int32_t h, int32_t colkey);
+/* buffer->buffer colour-key blit (see cron_blt_buf below): dst/src are cart
+ * pointers; w/h and dx/dy are packed (the cron_blt_buf wrapper packs them). */
+extern void     cvm_sys_cron_blt_buf     (uint8_t* dst, int32_t dst_dim, int32_t dst_pitch, const uint8_t* src, int32_t src_pitch, int32_t dst_pos, int32_t blt_dim, int32_t colkey);
 /* Forward decls at file scope — referencing these struct tags inside a
  * prototype's argument list (without this) would otherwise scope them to
  * the prototype, making the later typedef incompatible. */
@@ -333,6 +336,23 @@ static inline void     cron_tilemap     (int32_t slot, const uint16_t* ptr, int3
 /* Blit (sx,sy,w,h) of image bank `img` to (dx,dy). colkey<0 = opaque;
  * negative w/h flip. */
 static inline void     cron_blt         (int32_t img, int32_t dx, int32_t dy, int32_t sx, int32_t sy, int32_t w, int32_t h, int32_t colkey) { cvm_sys_cron_blt(img, dx, dy, sx, sy, w, h, colkey); }
+/* Blit a flat 8bpp sprite straight from one cart buffer INTO another (not the
+ * framebuffer), in native host code — lets the VM compose a sprite without
+ * running the per-pixel loop as bytecode (the win on weak targets). `dst` is a
+ * dst_w x dst_h buffer with row stride `dst_pitch`; `src` rows are `src_pitch`
+ * apart (pass a src already advanced to its sub-origin). The blt_w x blt_h rect
+ * lands at (dx,dy) in dst (clamped to dst bounds); source pixels == colkey are
+ * skipped (colkey<0 = opaque). dx/dy are signed (packed as i16). */
+static inline void     cron_blt_buf     (uint8_t* dst, int32_t dst_w, int32_t dst_h, int32_t dst_pitch,
+                                         const uint8_t* src, int32_t src_pitch,
+                                         int32_t dx, int32_t dy, int32_t blt_w, int32_t blt_h, int32_t colkey) {
+    cvm_sys_cron_blt_buf(dst,
+        (int32_t)(((uint32_t)dst_w << 16) | ((uint32_t)dst_h & 0xFFFFu)),
+        dst_pitch, src, src_pitch,
+        (int32_t)(((uint32_t)dx << 16) | ((uint32_t)dy & 0xFFFFu)),
+        (int32_t)(((uint32_t)blt_w << 16) | ((uint32_t)blt_h & 0xFFFFu)),
+        colkey);
+}
 static inline void     cron_bltm        (int32_t tm, int32_t dx, int32_t dy, int32_t sx, int32_t sy, int32_t w, int32_t h, int32_t colkey) { cvm_sys_cron_bltm(tm, dx, dy, sx, sy, w, h, colkey); }
 
 /* Tile-cell layout for cron_bltm and its raster/affine variants. */

@@ -261,6 +261,20 @@ static int sys_blt(struct cvm_image *img, int32_t *r, void *ud) {
     cron_gpu_blt(X->c, HEAP, (int)r[0], (int)r[1], (int)r[2], (int)r[3], (int)r[4], (int)r[5], (int)r[6], (int)r[7]);
     r[0] = 0; return 0;
 }
+/* sys_blt_buf — buffer->buffer colour-key blit (native). 8 args, packed:
+ *   r0 dst off | r1 dst_w<<16|dst_h | r2 dst_pitch | r3 src off | r4 src_pitch |
+ *   r5 dx<<16|dy (signed i16) | r6 blt_w<<16|blt_h | r7 colkey */
+static int sys_blt_buf(struct cvm_image *img, int32_t *r, void *ud) {
+    (void)img; GUARD;
+    int dst_w = (int)((uint32_t)r[1] >> 16),  dst_h = (int)((uint32_t)r[1] & 0xFFFF);
+    int dx    = (int)(int16_t)((uint32_t)r[5] >> 16);
+    int dy    = (int)(int16_t)((uint32_t)r[5] & 0xFFFF);
+    int blt_w = (int)((uint32_t)r[6] >> 16),  blt_h = (int)((uint32_t)r[6] & 0xFFFF);
+    cron_gpu_blt_buf(X->c, HEAP, X->img->mem_size,
+                     (uint32_t)r[0], dst_w, dst_h, (int)r[2],
+                     (uint32_t)r[3], (int)r[4], dx, dy, blt_w, blt_h, (int)r[7]);
+    r[0] = 0; return 0;
+}
 static int sys_bltm(struct cvm_image *img, int32_t *r, void *ud) {
     (void)img; GUARD;
     cron_gpu_bltm(X->c, HEAP, (int)r[0], (int)r[1], (int)r[2], (int)r[3], (int)r[4], (int)r[5], (int)r[6], (int)r[7]);
@@ -883,6 +897,7 @@ static const entry_t kSyscalls[] = {
     { "cvm_sys_cron_image",        sys_image        },
     { "cvm_sys_cron_tilemap",      sys_tilemap      },
     { "cvm_sys_cron_blt",          sys_blt          },
+    { "cvm_sys_cron_blt_buf",      sys_blt_buf      },
     { "cvm_sys_cron_bltm",         sys_bltm         },
     { "cvm_sys_cron_bltm_raster",  sys_bltm_raster  },
     { "cvm_sys_cron_bltm_affine",  sys_bltm_affine  },
