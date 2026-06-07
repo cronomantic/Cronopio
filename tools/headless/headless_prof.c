@@ -15,12 +15,17 @@
  * Built standalone (not via CMake) — one clang invocation over a profiler-
  * enabled cvm.c plus all of host/common/. `-std=gnu23` is required because
  * bios_sf2.c embeds the default SoundFont with C23 #embed, and TinySoundFont
- * (used by midisynth.c) is included from external/:
+ * (used by midisynth.c) is included from external/. Since the audio subsystem
+ * landed, host/common/ ALSO needs the stb_vorbis implementation TU (cron_ogg.c
+ * includes it HEADER_ONLY) and a link against libxmp (cron_module.c), so add
+ * stb_vorbis.c and libxmp.a (the bare host/common/*.c line no longer links):
  *
  *   CR=<cronopio-root>; CVM=$CR/external/CronoVM
- *   clang -O2 -std=gnu23 -DCVM_PROFILE \
+ *   clang -O2 -std=gnu23 -DCVM_PROFILE -DLIBXMP_STATIC \
  *     -I $CVM/include -I $CR/host/common -I $CR/external/TinySoundFont \
- *     $CVM/src/cvm.c $CR/host/common/*.c $CR/tools/headless/headless_prof.c \
+ *     -I $CR/external/libxmp/include \
+ *     $CVM/src/cvm.c $CR/host/common/*.c $CR/host/external/stb_vorbis.c \
+ *     $CR/tools/headless/headless_prof.c $CR/build/libxmp/libxmp.a \
  *     -o cronopio-headless-prof.exe -lm
  *
  * Then build the cart with CVM_SYMS=1 so cvm-translate emits <cart>.bin.sym.
